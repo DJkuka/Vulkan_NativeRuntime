@@ -16,7 +16,7 @@ import sys
 # Extra CMake arguments needed by the Android Vulkan build. Values are read by
 # Gradle from the GitHub Actions environment, which is populated by the workflow.
 EXTRA_OPTIONS = {
-    "GGML_BACKEND_DL": '"-DGGML_BACKEND_DL=OFF"',
+    "GGML_BACKEND_DL": '"-DGGML_BACKEND_DL=ON"',
     "BUILD_SHARED_LIBS": '"-DBUILD_SHARED_LIBS=OFF"',
     "Vulkan_INCLUDE_DIR": '"-DVulkan_INCLUDE_DIR=${System.getenv("VULKAN_INCLUDE_DIR") ?: ""}"',
     "Vulkan_LIBRARY": '"-DVulkan_LIBRARY=${System.getenv("VULKAN_LIBRARY") ?: ""}"',
@@ -102,7 +102,7 @@ def patch_upstream(upstream: Path) -> int:
     # Fail closed if the expected configuration cannot be read back unambiguously.
     for name, expected in {
         "GGML_VULKAN": "ON",
-        "GGML_BACKEND_DL": "OFF",
+        "GGML_BACKEND_DL": "ON",
         "BUILD_SHARED_LIBS": "OFF",
     }.items():
         found = option_matches(text, name)
@@ -123,7 +123,7 @@ def patch_upstream(upstream: Path) -> int:
     for name in ("Vulkan_INCLUDE_DIR", "Vulkan_LIBRARY", "Vulkan_GLSLC_EXECUTABLE", "SPIRV-Headers_DIR"):
         if option_matches(text, name):
             print(f"  {name}=<provided from GitHub Actions environment>")
-    print("Android NDK Vulkan headers/loader stub and host glslc/SPIRV-Headers are passed to CMake.")
+    print("Dynamic ggml backend modules are enabled; Android NDK Vulkan loader stub and host glslc/SPIR-V headers are passed to CMake.")
     return 0
 
 

@@ -141,8 +141,10 @@ jobs:
           echo "GGML_VULKAN cache values:"
           find upstream/llama-android -type f -name CMakeCache.txt -print0 \
             | xargs -0 -r grep -H -E '^GGML_VULKAN:' || true
+          echo "Dynamic backend outputs in AAR (expected Vulkan + CPU modules):"
+          unzip -l upstream/llama-android/library/build/outputs/aar/library-release.aar | grep -E 'jni/arm64-v8a/libggml-(vulkan|cpu).*\.so' || true
           echo "Vulkan references in Gradle build log:"
-          grep -n -i -E 'GGML_VULKAN|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR' vulkan-aar-build.log | tail -n 100 || true
+          grep -n -i -E 'GGML_VULKAN|GGML_BACKEND_DL|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR' vulkan-aar-build.log | tail -n 120 || true
 
       - name: Verify AAR and package native runtime
         shell: bash

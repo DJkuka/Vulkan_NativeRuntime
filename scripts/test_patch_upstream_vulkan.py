@@ -39,7 +39,7 @@ def main() -> None:
     a = run_case(UPSTREAM_STYLE)
     assert '"-DGGML_VULKAN=ON"' in a
     assert '"-DGGML_VULKAN=OFF"' not in a
-    assert '"-DGGML_BACKEND_DL=OFF"' in a
+    assert '"-DGGML_BACKEND_DL=ON"' in a
     assert '"-DBUILD_SHARED_LIBS=OFF"' in a
     assert '"-DVulkan_INCLUDE_DIR=${System.getenv("VULKAN_INCLUDE_DIR") ?: ""}"' in a
     b = run_case(NO_VULKAN_STYLE)
