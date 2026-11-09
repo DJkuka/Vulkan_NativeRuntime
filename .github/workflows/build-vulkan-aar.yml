@@ -161,21 +161,23 @@ jobs:
           test -d "$SPIRV_HEADERS_DIR"
           test -f "$SPIRV_HEADERS_INCLUDE_DIR/spirv/unified1/spirv.hpp"
 
-          # The Vulkan backend needs two independent Khronos header sets:
-          # Vulkan-Headers provides vulkan/vulkan.hpp; SPIRV-Headers provides
-          # spirv/unified1/spirv.hpp. Smoke-compile both with Android ARM64.
-          cat > "$RUNNER_TEMP/android_vulkan_headers_smoke.cpp" <<'EOF'
-          #include <vulkan/vulkan.hpp>
-          #include <spirv/unified1/spirv.hpp>
-          int main() { return (VK_HEADER_VERSION > 0 && spv::MagicNumber == 0x07230203) ? 0 : 1; }
-          EOF
-          "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" \
-            --target=aarch64-none-linux-android24 \
-            --sysroot="$SYSROOT" \
-            -std=c++17 \
-            -I"$VULKAN_INCLUDE_DIR" \
-            -I"$SPIRV_HEADERS_INCLUDE_DIR" \
-            -fsyntax-only "$RUNNER_TEMP/android_vulkan_headers_smoke.cpp"
+          # Do not invoke NDK clang++ directly here. A hand-written --target/--sysroot
+          # command can fall back to the runner's glibc headers (/usr/include/features.h)
+          # while using NDK libc++ headers. Also clear generic host include-path overrides.
+          unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH
+          # Use the same Android NDK CMake toolchain that AGP uses for the real native
+          # build, so libc++/bionic include paths, ABI and API-level flags are selected.
+          cmake -S scripts/android_vulkan_header_smoke \
+            -B "$RUNNER_TEMP/android-vulkan-header-smoke-build" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DANDROID_STL=c++_shared \
+            -DVULKAN_INCLUDE_DIR="$VULKAN_INCLUDE_DIR" \
+            -DSPIRV_HEADERS_INCLUDE_DIR="$SPIRV_HEADERS_INCLUDE_DIR" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake --build "$RUNNER_TEMP/android-vulkan-header-smoke-build" --verbose
+          echo "Android ARM64 header smoke test compiled with the NDK CMake toolchain."
 
           echo "VULKAN_LIBRARY=$VULKAN_LIB" >> "$GITHUB_ENV"
           echo "Android Vulkan C/C++ headers: $VULKAN_INCLUDE_DIR (Khronos Vulkan-Headers)"

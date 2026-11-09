@@ -31,3 +31,10 @@
 
 - Добавлен отдельный offline regression-тест `scripts/test_vulkan_headers_workflow.py`, проверяющий pin, CMake include propagation, smoke-test wiring и manifest provenance.
 - Package validator отклоняет отсутствующий/неполный SHA Vulkan-Headers.
+
+
+## v9
+- Убран ручной вызов NDK `clang++` для smoke-test: в нём libc++ цеплял host `/usr/include/features.h` и падал на glibc `bits/wordsize.h`.
+- Добавлен минимальный CMake smoke-проект, собранный через официальный Android NDK toolchain file с `arm64-v8a`, API 24 и `c++_shared`.
+- Smoke target по-прежнему компилирует оба обязательных заголовка: Vulkan-Hpp и SPIRV-Headers.
+- Обновлены regression-тест и документация. Основная Gradle/NDK-сборка остаётся финальным доказательством, что `ggml-vulkan.cpp` компилируется.

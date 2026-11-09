@@ -76,3 +76,10 @@ The v6 build reached `ggml-vulkan.cpp` and failed because it included `vulkan/vu
 ## v7.1: propagate Vulkan-Hpp include path
 
 The compile log proves that `ggml-vulkan.cpp` cannot see `vulkan/vulkan.hpp`; the NDK sysroot provides only the C headers. The workflow now pins Vulkan-Headers tag `v1.3.290` to commit `b379292b2ab6df5771ba9870d53cf8b2c9295daf`. The JNI CMake root sets `Vulkan_INCLUDE_DIR` and explicitly applies `include_directories(BEFORE SYSTEM ...)` before adding llama.cpp. The workflow also performs an Android ARM64 C++ syntax-only smoke compile of the actual header and the package validator requires the exact header path in the generated Android CMakeCache.
+
+
+## v9 correction: Android CMake smoke test
+
+The v8 standalone smoke test invoked NDK `clang++` manually with a target/sysroot. On the GitHub runner, libc++ then included `/usr/include/features.h`, i.e. host glibc, which failed on missing `bits/wordsize.h`. This is a false negative caused by the standalone compiler invocation not reproducing AGP's Android toolchain configuration.
+
+The v9 workflow removes the manual clang++ call and configures a minimal CMake object target using `$ANDROID_NDK/build/cmake/android.toolchain.cmake`, `ANDROID_ABI=arm64-v8a`, `ANDROID_PLATFORM=android-24`, and `ANDROID_STL=c++_shared`. The target compiles both Vulkan-Hpp and SPIR-V headers. The real Gradle externalNativeBuild remains authoritative for the final ggml-vulkan compile.

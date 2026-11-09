@@ -8,7 +8,7 @@
 
 ## Исправление ошибки `vulkan/vulkan.hpp` (v7.1)
 
-Предыдущая сборка дошла до `ggml-vulkan.cpp`, но остановилась с `fatal error: 'vulkan/vulkan.hpp' file not found`. Это ожидаемое различие: NDK r27c содержит C Vulkan header `vulkan/vulkan.h`, но не поставляет C++ binding Vulkan-Hpp. В v7 workflow отдельно загружает KhronosGroup/Vulkan-Headers tag `v1.3.290`, закреплённый commit `b379292b2ab6df5771ba9870d53cf8b2c9295daf`, и передаёт его `include/` в CMake через `Vulkan_INCLUDE_DIR`. Родительский JNI CMake также явно добавляет этот каталог через `include_directories(BEFORE SYSTEM ...)`, чтобы путь гарантированно получил `ggml-vulkan.cpp`. Android NDK по-прежнему используется для `libvulkan.so` loader stub. До основной сборки выполняется ARM64 NDK smoke compile, который включает именно `vulkan/vulkan.hpp`. Packaging validator дополнительно требует, чтобы реальный CMakeCache ссылался на тот же Vulkan-Headers include path.
+Предыдущая сборка дошла до `ggml-vulkan.cpp`, но остановилась с `fatal error: 'vulkan/vulkan.hpp' file not found`. Это ожидаемое различие: NDK r27c содержит C Vulkan header `vulkan/vulkan.h`, но не поставляет C++ binding Vulkan-Hpp. В v7 workflow отдельно загружает KhronosGroup/Vulkan-Headers tag `v1.3.290`, закреплённый commit `b379292b2ab6df5771ba9870d53cf8b2c9295daf`, и передаёт его `include/` в CMake через `Vulkan_INCLUDE_DIR`. Родительский JNI CMake также явно добавляет этот каталог через `include_directories(BEFORE SYSTEM ...)`, чтобы путь гарантированно получил `ggml-vulkan.cpp`. Android NDK по-прежнему используется для `libvulkan.so` loader stub. До основной сборки выполняется отдельный CMake smoke-target с тем же Android NDK toolchain-файлом, ABI `arm64-v8a` и API 24. Он компилирует оба заголовка, но больше не вызывает `clang++` вручную: прежний ручной вызов неполно воспроизводил параметры NDK и попадал в host glibc (`/usr/include/features.h`). Packaging validator дополнительно требует, чтобы реальный CMakeCache ссылался на те же Vulkan-Headers и SPIRV-Headers include paths.
 
 ## Что было не так в предыдущих версиях
 
@@ -71,7 +71,7 @@ Workflow:
 - загружает официальный Khronos Vulkan-Headers `v1.3.290` (закреплённый commit), потому что Android NDK r27c содержит `vulkan/vulkan.h`, но не содержит C++-обёртку `vulkan/vulkan.hpp`, которую включает `ggml-vulkan.cpp`;
 - отдельно устанавливает SPIRV-Headers: это другой репозиторий Khronos, он предоставляет `spirv/unified1/spirv.hpp`. Vulkan-Headers не содержит этот файл;
 - явно передаёт оба include-root в родительский JNI CMake через `include_directories(BEFORE SYSTEM ...)`. Это обходит обнаруженную проблему upstream: `find_package(SPIRV-Headers)` находит CMake package, но его include path не попадает в compile flags цели `ggml-vulkan` в данном Android build;
-- выполняет regression-тест конфигурации headers и отдельную Android ARM64 compile-smoke проверку обоих include: `vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp` до полной сборки;
+- выполняет regression-тест конфигурации headers и отдельный CMake smoke-target с Android NDK toolchain, который компилирует `vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp` до полной сборки;
 - клонирует `ffmpegkit-maintained/llama-android` вместе с закреплённым submodule `llama.cpp` и проверяет tag `b9878`;
 - патчит Gradle CMake args, JNI `CMakeLists.txt` и фактическую декларацию `option(GGML_VULKAN ...)` в ggml;
 - передаёт Khronos Vulkan-Headers `include/` как `Vulkan_INCLUDE_DIR`, SPIRV-Headers `include/` как `SPIRV_HEADERS_INCLUDE_DIR`, Android NDK loader stub как `Vulkan_LIBRARY`, а также host shader compiler и путь к SPIRV-Headers CMake package;
@@ -92,7 +92,7 @@ Actions не должен опубликовать runtime как успешны
 6. `libggml.so` содержит `DT_NEEDED` для `libggml-vulkan.so` и CPU backend.
 7. `libggml-vulkan.so` содержит `DT_NEEDED` для Android `libvulkan.so`.
 8. Реальный CMakeCache указывает `Vulkan_INCLUDE_DIR` на каталог Khronos Vulkan-Headers, в котором присутствует `vulkan/vulkan.hpp`, а `SPIRV_HEADERS_INCLUDE_DIR` — на каталог с `spirv/unified1/spirv.hpp`; обе директории передаются в compile options `ggml-vulkan`.
-9. До NDK-сборки успешна отдельная компиляция C++-проверки обоих include (`vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp`) для `aarch64-none-linux-android24`.
+9. До основной NDK-сборки успешен отдельный CMake smoke-target, сконфигурированный через `$ANDROID_NDK/build/cmake/android.toolchain.cmake`, с `ANDROID_ABI=arm64-v8a` и `ANDROID_PLATFORM=android-24`; он компилирует оба include (`vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp`) тем же способом выбора libc++/bionic, что и Android native build.
 10. В AAR отсутствует собственная копия системной `libvulkan.so`.
 11. Kotlin API `dev.ffmpegkit.llama.Llama` и `LlamaConfig` присутствует в `classes.jar`.
 
@@ -157,3 +157,12 @@ val vulkanConfig = LlamaConfig(contextSize = 2048, threads = 4, gpuLayers = 2)
 - JNI CMake сохраняет `SPIRV_HEADERS_INCLUDE_DIR` в CMakeCache и явно добавляет его через `include_directories(BEFORE SYSTEM ...)` до `add_subdirectory(llama.cpp)`. Это обходит случай, когда `find_package(SPIRV-Headers)` находит config, но include path не попадает в compile flags `ggml-vulkan`.
 - ARM64 smoke test теперь проверяет одновременно `vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp`.
 - Packaging validator требует точный SPIRV include root в Android CMakeCache и проверяет физическое наличие заголовка.
+
+
+## v9 — smoke test через Android NDK CMake toolchain
+
+В v8 отдельная проверка заголовков вызывала `clang++` вручную с `--target=aarch64-none-linux-android24` и `--sysroot`. Лог показал, что libc++ из Android sysroot затем подтянул host `/usr/include/features.h`, который требует glibc-файл `bits/wordsize.h`. Это ошибка изолированной проверки toolchain, а не свидетельство несовместимости Vulkan с Android.
+
+В v9 ручной вызов clang++ удалён. Вместо него добавлен минимальный CMake smoke-проект `scripts/android_vulkan_header_smoke`, который конфигурируется через официальный `$ANDROID_NDK/build/cmake/android.toolchain.cmake` с `ANDROID_ABI=arm64-v8a`, `ANDROID_PLATFORM=android-24`, `ANDROID_STL=c++_shared`. Внутри target компилирует `vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp`. Это использует Android toolchain setup вместо смешения Android libc++ и host glibc include paths.
+
+Основная Gradle/NDK-сборка по-прежнему остаётся окончательной проверкой совместимости `ggml-vulkan.cpp`; smoke test лишь проверяет заголовки тем же способом настройки компилятора.
