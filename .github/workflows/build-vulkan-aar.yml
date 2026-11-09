@@ -17,6 +17,8 @@ jobs:
       ANDROID_CMAKE_VERSION: '3.22.1'
       VULKAN_HEADERS_TAG: 'v1.3.290'
       VULKAN_HEADERS_COMMIT_PIN: 'b379292b2ab6df5771ba9870d53cf8b2c9295daf'
+      SPIRV_HEADERS_TAG: 'vulkan-sdk-1.3.290.0'
+      SPIRV_HEADERS_COMMIT_PIN: '2acb319af38d43be3ea76bfabf3998e5281d8d12'
 
     steps:
       - name: Checkout this build recipe
@@ -46,37 +48,62 @@ jobs:
           echo "ANDROID_NDK=$SDK_ROOT/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
           echo "$SDK_ROOT/cmake/$ANDROID_CMAKE_VERSION/bin" >> "$GITHUB_PATH"
 
-      - name: Install Vulkan shader compiler and SPIR-V headers
+      - name: Install host Vulkan shader compiler
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential ninja-build pkg-config glslc spirv-headers
+          # glslc is a host tool. Do NOT install/use Ubuntu's SPIRV-Headers under
+          # /usr/include: CMake treats that as an implicit host include path and
+          # omits it from an Android cross-compile command. Stage Khronos headers
+          # in RUNNER_TEMP in the next step instead.
+          sudo apt-get install -y build-essential ninja-build pkg-config glslc
           GLSLC="$(command -v glslc)"
           test -x "$GLSLC"
-          SPIRV_CFG="$(find /usr -type f \( -name 'SPIRV-HeadersConfig.cmake' -o -name 'SPIRV-Headers-config.cmake' \) -print -quit)"
-          SPIRV_HEADER="$(dpkg -L spirv-headers 2>/dev/null | grep -E '/spirv/unified1/spirv\.hpp$' | head -n 1 || true)"
-          if [ -z "$SPIRV_CFG" ] || [ -z "$SPIRV_HEADER" ]; then
-            echo 'Ubuntu package is missing SPIRV-Headers CMake config or unified1/spirv.hpp; building headers package from source.'
-            git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Headers"
-            cmake -S "$RUNNER_TEMP/SPIRV-Headers" -B "$RUNNER_TEMP/SPIRV-Headers-build" \
-              -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/spirv-headers-install"
-            cmake --build "$RUNNER_TEMP/SPIRV-Headers-build" --parallel 2
-            cmake --install "$RUNNER_TEMP/SPIRV-Headers-build"
-            SPIRV_CFG="$(find "$RUNNER_TEMP/spirv-headers-install" -type f \( -name 'SPIRV-HeadersConfig.cmake' -o -name 'SPIRV-Headers-config.cmake' \) -print -quit)"
-            SPIRV_HEADER="$RUNNER_TEMP/spirv-headers-install/include/spirv/unified1/spirv.hpp"
-          fi
-          if [ -z "$SPIRV_CFG" ] || [ -z "$SPIRV_HEADER" ] || [ ! -f "$SPIRV_HEADER" ]; then
-            echo 'SPIRV-Headers config or spirv/unified1/spirv.hpp is still missing' >&2
-            find /usr/include "$RUNNER_TEMP/spirv-headers-install" -path '*/spirv/unified1/spirv.hpp' -print 2>/dev/null || true
+          echo "VULKAN_GLSLC_EXECUTABLE=$GLSLC" >> "$GITHUB_ENV"
+          echo "Host shader compiler: $GLSLC"
+
+      - name: Fetch and install pinned Khronos SPIRV-Headers outside host system paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          SPIRV_SRC="$RUNNER_TEMP/SPIRV-Headers"
+          SPIRV_BUILD="$RUNNER_TEMP/SPIRV-Headers-build"
+          SPIRV_PREFIX="$RUNNER_TEMP/spirv-headers-install"
+          git clone --depth 1 --branch "$SPIRV_HEADERS_TAG" \
+            https://github.com/KhronosGroup/SPIRV-Headers.git "$SPIRV_SRC"
+          SPIRV_COMMIT="$(git -C "$SPIRV_SRC" rev-parse HEAD)"
+          if [ "$SPIRV_COMMIT" != "$SPIRV_HEADERS_COMMIT_PIN" ]; then
+            echo "Unexpected SPIRV-Headers revision: $SPIRV_COMMIT (expected $SPIRV_HEADERS_COMMIT_PIN)" >&2
             exit 1
           fi
-          SPIRV_INCLUDE="${SPIRV_HEADER%/spirv/unified1/spirv.hpp}"
+          test -f "$SPIRV_SRC/include/spirv/unified1/spirv.hpp"
+          # The project is header-only. Configure and install to a private prefix;
+          # this keeps the include root non-implicit for Android clang/CMake.
+          cmake -S "$SPIRV_SRC" -B "$SPIRV_BUILD" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSPIRV_HEADERS_ENABLE_TESTS=OFF \
+            -DSPIRV_HEADERS_ENABLE_INSTALL=ON \
+            -DCMAKE_INSTALL_PREFIX="$SPIRV_PREFIX"
+          cmake --install "$SPIRV_BUILD"
+          SPIRV_HEADER="$SPIRV_PREFIX/include/spirv/unified1/spirv.hpp"
+          test -f "$SPIRV_HEADER"
+          SPIRV_CFG="$(find "$SPIRV_PREFIX" -type f \
+            \( -name 'SPIRV-HeadersConfig.cmake' -o -name 'SPIRV-Headers-config.cmake' \) -print -quit)"
+          if [ -z "$SPIRV_CFG" ]; then
+            echo "SPIRV-Headers CMake package config was not installed under $SPIRV_PREFIX" >&2
+            find "$SPIRV_PREFIX" -maxdepth 6 -type f -print | sort | head -n 100
+            exit 1
+          fi
+          SPIRV_INCLUDE="$SPIRV_PREFIX/include"
+          test "$SPIRV_INCLUDE" != "/usr/include"
           test -f "$SPIRV_INCLUDE/spirv/unified1/spirv.hpp"
-          echo "VULKAN_GLSLC_EXECUTABLE=$GLSLC" >> "$GITHUB_ENV"
           echo "SPIRV_HEADERS_DIR=$(dirname "$SPIRV_CFG")" >> "$GITHUB_ENV"
           echo "SPIRV_HEADERS_INCLUDE_DIR=$SPIRV_INCLUDE" >> "$GITHUB_ENV"
-          echo "SPIRV-Headers C++ include root: $SPIRV_INCLUDE"
+          echo "SPIRV_HEADERS_COMMIT=$SPIRV_COMMIT" >> "$GITHUB_ENV"
+          echo "SPIRV-Headers config: $SPIRV_CFG"
+          echo "SPIRV-Headers include root: $SPIRV_INCLUDE"
+          echo "Pinned SPIRV-Headers commit: $SPIRV_COMMIT"
 
       - name: Fetch official Khronos Vulkan-Headers (including Vulkan-Hpp)
         shell: bash
@@ -176,6 +203,13 @@ jobs:
             -DVULKAN_INCLUDE_DIR="$VULKAN_INCLUDE_DIR" \
             -DSPIRV_HEADERS_INCLUDE_DIR="$SPIRV_HEADERS_INCLUDE_DIR" \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          echo "Smoke test Vulkan include: $VULKAN_INCLUDE_DIR"
+          echo "Smoke test SPIR-V include (must be staged under RUNNER_TEMP): $SPIRV_HEADERS_INCLUDE_DIR"
+          test "$SPIRV_HEADERS_INCLUDE_DIR" != "/usr/include"
+          python3 scripts/verify_android_smoke_compile_commands.py \
+            --compile-commands "$RUNNER_TEMP/android-vulkan-header-smoke-build/compile_commands.json" \
+            --vulkan-include-dir "$VULKAN_INCLUDE_DIR" \
+            --spirv-include-dir "$SPIRV_HEADERS_INCLUDE_DIR"
           cmake --build "$RUNNER_TEMP/android-vulkan-header-smoke-build" --verbose
           echo "Android ARM64 header smoke test compiled with the NDK CMake toolchain."
 
@@ -234,6 +268,7 @@ jobs:
             --ndk-version "$ANDROID_NDK_VERSION" \
             --spirv-headers-dir "$SPIRV_HEADERS_DIR" \
             --spirv-headers-include-dir "$SPIRV_HEADERS_INCLUDE_DIR" \
+            --spirv-headers-commit "$SPIRV_HEADERS_COMMIT" \
             --vulkan-include-dir "$VULKAN_INCLUDE_DIR" \
             --vulkan-headers-commit "$VULKAN_HEADERS_COMMIT" \
             --glslc "$VULKAN_GLSLC_EXECUTABLE"

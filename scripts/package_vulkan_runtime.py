@@ -143,6 +143,7 @@ def main() -> int:
     parser.add_argument("--ndk-version", required=True)
     parser.add_argument("--spirv-headers-dir", required=True)
     parser.add_argument("--spirv-headers-include-dir", required=True, type=Path)
+    parser.add_argument("--spirv-headers-commit", required=True)
     parser.add_argument("--vulkan-include-dir", required=True)
     parser.add_argument("--vulkan-headers-commit", required=True)
     parser.add_argument("--glslc", required=True)
@@ -155,8 +156,16 @@ def main() -> int:
 
     if not re.fullmatch(r"[0-9a-fA-F]{40}", args.vulkan_headers_commit):
         raise SystemExit(f"Invalid Vulkan-Headers commit SHA: {args.vulkan_headers_commit!r}")
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", args.spirv_headers_commit):
+        raise SystemExit(f"Invalid SPIRV-Headers commit SHA: {args.spirv_headers_commit!r}")
     vulkan_include_dir = args.vulkan_include_dir.resolve()
     spirv_headers_include_dir = args.spirv_headers_include_dir.resolve()
+    if str(spirv_headers_include_dir) == "/usr/include" or str(spirv_headers_include_dir).startswith("/usr/include/"):
+        raise SystemExit(
+            "SPIRV-Headers must be staged under RUNNER_TEMP, not /usr/include. "
+            "CMake may treat /usr/include as an implicit host path and omit it "
+            "from Android cross-compile include flags."
+        )
     if not (spirv_headers_include_dir / "spirv/unified1/spirv.hpp").is_file():
         raise SystemExit(
             "SPIRV-Headers include directory is missing spirv/unified1/spirv.hpp: "
@@ -337,6 +346,7 @@ def main() -> int:
         "vulkan_include_dir": str(vulkan_include_dir),
         "vulkan_headers_commit": args.vulkan_headers_commit,
         "vulkan_cpp_header": str(vulkan_include_dir / "vulkan" / "vulkan.hpp"),
+        "spirv_headers_commit": args.spirv_headers_commit,
         "spirv_headers_include_dir": str(spirv_headers_include_dir),
         "spirv_cpp_header": str(spirv_headers_include_dir / "spirv" / "unified1" / "spirv.hpp"),
         "vulkan_loader_library": "Android NDK system Vulkan stub (not bundled)",

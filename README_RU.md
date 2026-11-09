@@ -67,9 +67,10 @@ AAR может не включить часть транзитивных native 
 Workflow:
 
 - устанавливает JDK 17, Android SDK, NDK r27c и CMake 3.22.1;
-- устанавливает host `glslc`, SPIRV-Headers package config и отдельный include-каталог SPIR-V headers;
+- устанавливает host `glslc`; SPIRV-Headers отдельно клонируется по закреплённому Khronos SDK tag и устанавливается в `$RUNNER_TEMP/spirv-headers-install`, а не в `/usr/include`;
 - загружает официальный Khronos Vulkan-Headers `v1.3.290` (закреплённый commit), потому что Android NDK r27c содержит `vulkan/vulkan.h`, но не содержит C++-обёртку `vulkan/vulkan.hpp`, которую включает `ggml-vulkan.cpp`;
-- отдельно устанавливает SPIRV-Headers: это другой репозиторий Khronos, он предоставляет `spirv/unified1/spirv.hpp`. Vulkan-Headers не содержит этот файл;
+- отдельно устанавливает SPIRV-Headers из тега `vulkan-sdk-1.3.290.0`, commit `2acb319af38d43be3ea76bfabf3998e5281d8d12`: это другой репозиторий Khronos, он предоставляет `spirv/unified1/spirv.hpp`. Vulkan-Headers не содержит этот файл;
+- не использует Ubuntu-копию SPIRV-Headers из `/usr/include`: CMake может считать `/usr/include` implicit host include path и не добавлять его в параметры Android cross-compile. Вместо этого заголовки устанавливаются в отдельный prefix под `$RUNNER_TEMP`;
 - явно передаёт оба include-root в родительский JNI CMake через `include_directories(BEFORE SYSTEM ...)`. Это обходит обнаруженную проблему upstream: `find_package(SPIRV-Headers)` находит CMake package, но его include path не попадает в compile flags цели `ggml-vulkan` в данном Android build;
 - выполняет regression-тест конфигурации headers и отдельный CMake smoke-target с Android NDK toolchain, который компилирует `vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp` до полной сборки;
 - клонирует `ffmpegkit-maintained/llama-android` вместе с закреплённым submodule `llama.cpp` и проверяет tag `b9878`;
@@ -166,3 +167,12 @@ val vulkanConfig = LlamaConfig(contextSize = 2048, threads = 4, gpuLayers = 2)
 В v9 ручной вызов clang++ удалён. Вместо него добавлен минимальный CMake smoke-проект `scripts/android_vulkan_header_smoke`, который конфигурируется через официальный `$ANDROID_NDK/build/cmake/android.toolchain.cmake` с `ANDROID_ABI=arm64-v8a`, `ANDROID_PLATFORM=android-24`, `ANDROID_STL=c++_shared`. Внутри target компилирует `vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp`. Это использует Android toolchain setup вместо смешения Android libc++ и host glibc include paths.
 
 Основная Gradle/NDK-сборка по-прежнему остаётся окончательной проверкой совместимости `ggml-vulkan.cpp`; smoke test лишь проверяет заголовки тем же способом настройки компилятора.
+
+
+## v10 — SPIRV-Headers staged include root (исправление v9 smoke test)
+
+Лог v9 показал, что smoke-test компилировался с `-isystem .../Vulkan-Headers/include`, но без SPIRV-Headers. Причина: предыдущий workflow предпочитал пакет Ubuntu `spirv-headers`, который размещает include root в `/usr/include`. Для cross-compiler CMake может считать `/usr/include` implicit host include directory и не добавлять его в командную строку Android clang. Это объясняет, почему smoke-test видел `vulkan.hpp`, но не видел `spirv.hpp`.
+
+В v10 SPIRV-Headers больше не берётся из системного apt-пакета. Workflow клонирует Khronos tag `vulkan-sdk-1.3.290.0`, проверяет commit `2acb319af38d43be3ea76bfabf3998e5281d8d12`, устанавливает проект в `$RUNNER_TEMP/spirv-headers-install` и задаёт include root `$RUNNER_TEMP/spirv-headers-install/include`. Это нестандартный staged path, который должен явно присутствовать в compile command.
+
+Дополнительно добавлен `verify_android_smoke_compile_commands.py`: после CMake configure он читает `compile_commands.json` и требует наличие обоих точных include roots в команде компиляции `android_vulkan_header_smoke.cpp`. Проверка отдельно отклоняет `/usr/include`. Такой же staged `SPIRV_HEADERS_INCLUDE_DIR` передаётся в JNI CMake и используется реальной целью `ggml-vulkan`.

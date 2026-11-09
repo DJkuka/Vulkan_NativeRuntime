@@ -19,7 +19,14 @@ def main() -> None:
 
     assert "VULKAN_HEADERS_TAG: 'v1.3.290'" in workflow
     assert "VULKAN_HEADERS_COMMIT_PIN: 'b379292b2ab6df5771ba9870d53cf8b2c9295daf'" in workflow
+    assert "SPIRV_HEADERS_TAG: 'vulkan-sdk-1.3.290.0'" in workflow
+    assert "SPIRV_HEADERS_COMMIT_PIN: '2acb319af38d43be3ea76bfabf3998e5281d8d12'" in workflow
     assert "https://github.com/KhronosGroup/Vulkan-Headers.git" in workflow
+    assert "https://github.com/KhronosGroup/SPIRV-Headers.git" in workflow
+    assert 'SPIRV_INCLUDE="$SPIRV_PREFIX/include"' in workflow
+    assert 'test "$SPIRV_INCLUDE" != "/usr/include"' in workflow
+    assert 'verify_android_smoke_compile_commands.py' in workflow
+    assert '--spirv-headers-commit "$SPIRV_HEADERS_COMMIT"' in workflow
     assert 'test -f "$VKH_INCLUDE/vulkan/vulkan.hpp"' in workflow
     assert 'test -f "$VULKAN_INCLUDE_DIR/vulkan/vulkan.hpp"' in workflow
     assert '"$ANDROID_NDK/build/cmake/android.toolchain.cmake"' in workflow
@@ -33,11 +40,14 @@ def main() -> None:
     assert 'if(NOT ANDROID)' in smoke_cmake
     assert 'CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a"' in smoke_cmake
     assert 'target_compile_features(android_vulkan_header_smoke PRIVATE cxx_std_17)' in smoke_cmake
+    assert 'target_include_directories(android_vulkan_header_smoke SYSTEM BEFORE PRIVATE' in smoke_cmake
+    assert 'SPIRV_HEADERS_INCLUDE_DIR MATCHES "^/usr/include/"' in smoke_cmake
     assert '#include <vulkan/vulkan.hpp>' in smoke_cpp
     assert '#include <spirv/unified1/spirv.hpp>' in smoke_cpp
 
     print("PASS: Khronos Vulkan-Headers is pinned and provides vulkan.hpp")
-    print("PASS: SPIRV-Headers include root is passed independently")
+    print("PASS: SPIRV-Headers are pinned and staged under RUNNER_TEMP, not implicit /usr/include")
+    print("PASS: smoke compile_commands verifier requires both explicit include paths")
     print("PASS: header smoke test uses Android NDK CMake toolchain, not host-fallback clang++ invocation")
     print("PASS: smoke test asserts Android arm64-v8a and compiles both C++ headers")
     print("PASS: JNI CMake propagates both Khronos header roots")

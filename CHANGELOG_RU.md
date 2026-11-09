@@ -38,3 +38,11 @@
 - Добавлен минимальный CMake smoke-проект, собранный через официальный Android NDK toolchain file с `arm64-v8a`, API 24 и `c++_shared`.
 - Smoke target по-прежнему компилирует оба обязательных заголовка: Vulkan-Hpp и SPIRV-Headers.
 - Обновлены regression-тест и документация. Основная Gradle/NDK-сборка остаётся финальным доказательством, что `ggml-vulkan.cpp` компилируется.
+
+
+## v10
+
+- Исправлен v9 header smoke test: SPIRV-Headers больше не берётся из Ubuntu `/usr/include`, поскольку CMake может опускать implicit host include path из Android cross-compile flags.
+- SPIRV-Headers берётся из закреплённого Khronos tag `vulkan-sdk-1.3.290.0` / commit `2acb319af38d43be3ea76bfabf3998e5281d8d12` и устанавливается в `$RUNNER_TEMP/spirv-headers-install`.
+- Добавлен анализ `compile_commands.json`, который требует фактическое присутствие Vulkan-Headers и SPIRV-Headers путей в Android smoke compile command.
+- Packaging manifest сохраняет commit SPIRV-Headers; validator отклоняет системный `/usr/include` как SPIRV include root.

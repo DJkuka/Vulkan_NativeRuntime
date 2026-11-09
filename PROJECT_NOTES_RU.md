@@ -83,3 +83,8 @@ The compile log proves that `ggml-vulkan.cpp` cannot see `vulkan/vulkan.hpp`; th
 The v8 standalone smoke test invoked NDK `clang++` manually with a target/sysroot. On the GitHub runner, libc++ then included `/usr/include/features.h`, i.e. host glibc, which failed on missing `bits/wordsize.h`. This is a false negative caused by the standalone compiler invocation not reproducing AGP's Android toolchain configuration.
 
 The v9 workflow removes the manual clang++ call and configures a minimal CMake object target using `$ANDROID_NDK/build/cmake/android.toolchain.cmake`, `ANDROID_ABI=arm64-v8a`, `ANDROID_PLATFORM=android-24`, and `ANDROID_STL=c++_shared`. The target compiles both Vulkan-Hpp and SPIR-V headers. The real Gradle externalNativeBuild remains authoritative for the final ggml-vulkan compile.
+
+
+## v10 correction
+
+The v9 error `spirv/unified1/spirv.hpp file not found` in `android_vulkan_header_smoke.cpp` occurred because the workflow sourced SPIRV-Headers from the Ubuntu apt package. That package's include root is `/usr/include`; CMake's Android cross-compile generator can consider it an implicit host system include and omit it from the command. v10 now fetches the Khronos SDK-matched tag `vulkan-sdk-1.3.290.0` (commit `2acb319af38d43be3ea76bfabf3998e5281d8d12`) and installs headers into `$RUNNER_TEMP/spirv-headers-install/include`. A new compile_commands verifier asserts both Vulkan and SPIR-V include roots are present in the smoke compile command and rejects `/usr/include`. The same non-implicit root is passed through JNI CMake to llama.cpp.
