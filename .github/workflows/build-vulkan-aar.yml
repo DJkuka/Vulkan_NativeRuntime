@@ -69,6 +69,9 @@ jobs:
           echo "VULKAN_GLSLC_EXECUTABLE=$GLSLC" >> "$GITHUB_ENV"
           echo "SPIRV_HEADERS_DIR=$(dirname "$SPIRV_CFG")" >> "$GITHUB_ENV"
 
+      - name: Test upstream patcher (format and idempotence)
+        run: python3 scripts/test_patch_upstream_vulkan.py
+
       - name: Fetch upstream llama-android and pinned llama.cpp submodule
         shell: bash
         run: |
@@ -83,8 +86,20 @@ jobs:
           echo "Pinned llama.cpp tag: $LLAMA_DESC"
           test "$LLAMA_DESC" = "b9878"
 
+      - name: Show upstream CMake argument block
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Upstream library/build.gradle.kts at $(git -C upstream/llama-android rev-parse --short HEAD):"
+          grep -n -A24 -B4 "arguments += listOf" upstream/llama-android/library/build.gradle.kts || true
+
       - name: Patch upstream native build to GGML_VULKAN=ON
-        run: python3 scripts/patch_upstream_vulkan.py upstream/llama-android
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/patch_upstream_vulkan.py upstream/llama-android
+          echo "Patched CMake arguments:"
+          grep -n -A18 -B2 "arguments += listOf" upstream/llama-android/library/build.gradle.kts
 
       - name: Configure Android Vulkan toolchain paths
         shell: bash

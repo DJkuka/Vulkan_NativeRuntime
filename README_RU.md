@@ -33,10 +33,10 @@ Workflow клонирует публичный репозиторий `ffmpegkit
 
 Workflow сам:
 
-1. Устанавливает JDK 17, Android SDK, NDK r27c и CMake 3.22.1 (это версии, ожидаемые upstream `llama-android`).
+1. Проверяет regression-тестами патчер Gradle CMake-аргументов (вариант с `OFF`, без Vulkan-параметра и повторный запуск), затем устанавливает JDK 17, Android SDK, NDK r27c и CMake 3.22.1 (это версии, ожидаемые upstream `llama-android`).
 2. Устанавливает host `glslc` и SPIR-V headers для компиляции Vulkan shader pipeline.
 3. Клонирует upstream `llama-android` вместе с submodule `llama.cpp`.
-4. Проверяет, что в upstream build file найден исходный параметр `GGML_VULKAN=OFF`, и заменяет его на `ON`.
+4. Печатает фактический CMake-блок upstream Gradle-файла. Патчер ищет `GGML_VULKAN` по имени параметра, не привязываясь к комментарию или точному форматированию: заменяет `OFF` на `ON`, оставляет уже включённый `ON` или добавляет параметр в `arguments += listOf(...)`, если upstream его убрал. Дополнительно патчер идемпотентен и имеет офлайн regression-тесты.
 5. Передаёт CMake путь к **Android NDK Vulkan headers/loader stub** и host `glslc`/SPIR-V headers.
 6. Собирает `:library:assembleRelease` — именно AAR, а не самописный тестовый APK.
 7. Проверяет CMake cache на `GGML_VULKAN=ON`, ARM64 ELF-библиотеки, зависимость runtime от системного `libvulkan.so`, наличие JNI bridge и отсутствие упакованного внутрь AAR `libvulkan.so`.
