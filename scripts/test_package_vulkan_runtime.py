@@ -18,6 +18,10 @@ def main() -> None:
     bad_cache = good_cache.replace("GGML_VULKAN:BOOL=ON", "GGML_VULKAN:BOOL=OFF")
     assert module.parse_cache_values(good_cache) == module.REQUIRED_CACHE
     assert module.parse_cache_values(bad_cache)["GGML_VULKAN"] == "OFF"
+    packager_source = SCRIPT.read_text(encoding="utf-8")
+    assert "--spirv-headers-include-dir" in packager_source
+    assert "SPIRV_HEADERS_INCLUDE_DIR" in packager_source
+    assert "spirv/unified1/spirv.hpp" in packager_source
 
     graph = (
         "build ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o: CXX_COMPILER\n"
@@ -58,6 +62,7 @@ def main() -> None:
             module.is_arm64_elf = original
 
     print("PASS: effective CMakeCache ON/OFF parsing")
+    print("PASS: package validation requires the actual SPIRV-Headers include root and header")
     print("PASS: Ninja graph requires Vulkan and CPU backend targets")
     print("PASS: missing ARM64 backend .so files are injected from the same build")
     print("PASS: already packaged backends are not duplicated on rerun")

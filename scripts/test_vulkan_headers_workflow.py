@@ -23,8 +23,9 @@ def main() -> None:
     assert 'parser.add_argument("--vulkan-headers-commit", required=True)' in packager
     assert '"vulkan_headers_commit": args.vulkan_headers_commit' in packager
     print("PASS: Khronos Vulkan-Headers is pinned and includes vulkan.hpp")
-    print("PASS: Android ARM64 smoke compile uses the Vulkan-Hpp include directory")
-    print("PASS: JNI CMake explicitly propagates Vulkan-Hpp include path to subprojects")
+    print("PASS: SPIRV-Headers provides spirv/unified1/spirv.hpp and is passed separately")
+    print("PASS: Android ARM64 smoke compile checks both Vulkan-Hpp and SPIR-V headers")
+    print("PASS: JNI CMake explicitly propagates both Khronos header roots to subprojects")
     print("PASS: packaging validator records and checks Vulkan-Headers provenance")
 
 

@@ -74,6 +74,9 @@ def main() -> None:
     assert cmake.index(module.CMAKE_MARKER_BEGIN) < cmake.index("add_subdirectory(")
     assert '"$ENV{VULKAN_LIBRARY}" CACHE FILEPATH' in cmake
     assert 'include_directories(BEFORE SYSTEM "$ENV{VULKAN_INCLUDE_DIR}")' in cmake
+    assert 'include_directories(BEFORE SYSTEM "$ENV{SPIRV_HEADERS_INCLUDE_DIR}")' in cmake
+    assert 'SPIRV_HEADERS_INCLUDE_DIR is required' in cmake
+    assert 'spirv/unified1/spirv.hpp' in cmake
     assert module.GGML_MARKER_BEGIN in ggml
     assert 'set(GGML_VULKAN ON CACHE BOOL "Enable ggml Vulkan backend for Android" FORCE)' in ggml
     assert ggml.index(module.GGML_MARKER_BEGIN) < ggml.index('option(GGML_VULKAN')
@@ -85,6 +88,7 @@ def main() -> None:
     print("PASS: real CMake configure overrides a conflicting -DGGML_VULKAN=OFF and writes ON to CMakeCache")
     print("PASS: Vulkan-Hpp include path explicitly propagated to all JNI subprojects")
     print("PASS: Vulkan loader stub and host glslc/SPIR-V paths forwarded")
+    print("PASS: SPIRV-Headers C++ include root explicitly propagated to ggml-vulkan")
     print("PASS: patch remains idempotent")
 
 

@@ -142,6 +142,7 @@ def main() -> int:
     parser.add_argument("--build-log", required=True, type=Path)
     parser.add_argument("--ndk-version", required=True)
     parser.add_argument("--spirv-headers-dir", required=True)
+    parser.add_argument("--spirv-headers-include-dir", required=True, type=Path)
     parser.add_argument("--vulkan-include-dir", required=True)
     parser.add_argument("--vulkan-headers-commit", required=True)
     parser.add_argument("--glslc", required=True)
@@ -155,6 +156,12 @@ def main() -> int:
     if not re.fullmatch(r"[0-9a-fA-F]{40}", args.vulkan_headers_commit):
         raise SystemExit(f"Invalid Vulkan-Headers commit SHA: {args.vulkan_headers_commit!r}")
     vulkan_include_dir = args.vulkan_include_dir.resolve()
+    spirv_headers_include_dir = args.spirv_headers_include_dir.resolve()
+    if not (spirv_headers_include_dir / "spirv/unified1/spirv.hpp").is_file():
+        raise SystemExit(
+            "SPIRV-Headers include directory is missing spirv/unified1/spirv.hpp: "
+            f"{spirv_headers_include_dir}"
+        )
     for required_header in ("vulkan/vulkan.h", "vulkan/vulkan.hpp", "vulkan/vulkan_core.h"):
         if not (vulkan_include_dir / required_header).is_file():
             raise SystemExit(
@@ -170,9 +177,13 @@ def main() -> int:
         values = parse_cache_values(cache_text)
         include_match = re.search(r"^Vulkan_INCLUDE_DIR:[^=]+=([^\r\n]+)\s*$", cache_text, re.M)
         values["Vulkan_INCLUDE_DIR"] = include_match.group(1).strip() if include_match else "<unset>"
+        spirv_include_match = re.search(r"^SPIRV_HEADERS_INCLUDE_DIR:[^=]+=([^\r\n]+)\s*$", cache_text, re.M)
+        values["SPIRV_HEADERS_INCLUDE_DIR"] = spirv_include_match.group(1).strip() if spirv_include_match else "<unset>"
         cache_records.append({"path": str(cache), **values})
-        if values["Vulkan_INCLUDE_DIR"] == str(vulkan_include_dir) and all(
-            values.get(key) == val for key, val in REQUIRED_CACHE.items()
+        if (
+            values["Vulkan_INCLUDE_DIR"] == str(vulkan_include_dir)
+            and values["SPIRV_HEADERS_INCLUDE_DIR"] == str(spirv_headers_include_dir)
+            and all(values.get(key) == val for key, val in REQUIRED_CACHE.items())
         ):
             cache_good.append(cache)
 
@@ -209,8 +220,9 @@ def main() -> int:
         raise SystemExit(
             "CMakeCache exists but none has the required effective values and Khronos Vulkan-Hpp include path "
             "(GGML_VULKAN=ON, GGML_CPU=ON, GGML_BACKEND_DL=OFF, BUILD_SHARED_LIBS=ON, "
-            f"Vulkan_INCLUDE_DIR={vulkan_include_dir}). Observed caches: {cache_records}. "
-            "Check the JNI CMake FORCE block and Vulkan-Headers path passed by Gradle."
+            f"Vulkan_INCLUDE_DIR={vulkan_include_dir}, "
+            f"SPIRV_HEADERS_INCLUDE_DIR={spirv_headers_include_dir}). Observed caches: {cache_records}. "
+            "Check that the JNI CMake explicitly propagates both Vulkan-Headers and SPIRV-Headers include roots."
         )
     if not caches and not text_config_ok:
         raise SystemExit(
@@ -325,6 +337,8 @@ def main() -> int:
         "vulkan_include_dir": str(vulkan_include_dir),
         "vulkan_headers_commit": args.vulkan_headers_commit,
         "vulkan_cpp_header": str(vulkan_include_dir / "vulkan" / "vulkan.hpp"),
+        "spirv_headers_include_dir": str(spirv_headers_include_dir),
+        "spirv_cpp_header": str(spirv_headers_include_dir / "spirv" / "unified1" / "spirv.hpp"),
         "vulkan_loader_library": "Android NDK system Vulkan stub (not bundled)",
         "glslc": args.glslc,
         "spirv_headers_dir": args.spirv_headers_dir,
@@ -375,6 +389,7 @@ def main() -> int:
     print(f"Backend libraries injected from this CMake build: {', '.join(added) if added else 'none; AAR already contained them'}")
     print(f"Vulkan-Headers commit: {args.vulkan_headers_commit}")
     print(f"Vulkan-Hpp include: {vulkan_include_dir / 'vulkan' / 'vulkan.hpp'}")
+    print(f"SPIR-V include: {spirv_headers_include_dir / 'spirv' / 'unified1' / 'spirv.hpp'}")
     print(f"Runtime bundle: {runtime_zip}")
     return 0
 

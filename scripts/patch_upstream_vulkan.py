@@ -63,6 +63,19 @@ endif()
 if(DEFINED ENV{SPIRV_HEADERS_DIR} AND NOT "$ENV{SPIRV_HEADERS_DIR}" STREQUAL "")
     set(SPIRV-Headers_DIR "$ENV{SPIRV_HEADERS_DIR}" CACHE PATH "SPIRV-Headers CMake package" FORCE)
 endif()
+if(DEFINED ENV{SPIRV_HEADERS_INCLUDE_DIR} AND NOT "$ENV{SPIRV_HEADERS_INCLUDE_DIR}" STREQUAL "")
+    if(NOT EXISTS "$ENV{SPIRV_HEADERS_INCLUDE_DIR}/spirv/unified1/spirv.hpp")
+        message(FATAL_ERROR "SPIRV-Headers include directory is missing spirv/unified1/spirv.hpp: $ENV{SPIRV_HEADERS_INCLUDE_DIR}")
+    endif()
+    set(SPIRV_HEADERS_INCLUDE_DIR "$ENV{SPIRV_HEADERS_INCLUDE_DIR}" CACHE PATH "SPIRV-Headers include directory" FORCE)
+    # ggml-vulkan currently finds the SPIRV-Headers CMake package but does not
+    # propagate its imported include directories to ggml-vulkan's compile
+    # target on this Android build. Add the real header root to descendants.
+    include_directories(BEFORE SYSTEM "$ENV{SPIRV_HEADERS_INCLUDE_DIR}")
+    message(STATUS "TapTranslate: explicitly adding SPIRV-Headers include root: $ENV{SPIRV_HEADERS_INCLUDE_DIR}")
+else()
+    message(FATAL_ERROR "SPIRV_HEADERS_INCLUDE_DIR is required for ggml-vulkan (spirv/unified1/spirv.hpp)")
+endif()
 # END TAPTRANSLATE VULKAN CONFIG
 '''
 
@@ -327,7 +340,7 @@ def patch_upstream(upstream: Path) -> int:
     print("  GGML_CPU=ON (CPU fallback kept)")
     print("  GGML_BACKEND_DL=OFF")
     print("  BUILD_SHARED_LIBS=ON")
-    print("  Khronos Vulkan-Headers (vulkan.hpp) + Android NDK Vulkan loader stub + host glslc/SPIR-V paths")
+    print("  Khronos Vulkan-Headers (vulkan.hpp) + SPIRV-Headers (spirv.hpp) + Android NDK Vulkan loader stub + host glslc")
     print("Expected link mode: libggml-vulkan.so and libggml-cpu*.so are ordinary shared dependencies of libggml.so; GGML_BACKEND_DL remains OFF (no dlopen plugin scan).")
     return 0
 

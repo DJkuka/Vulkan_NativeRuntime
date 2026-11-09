@@ -55,21 +55,28 @@ jobs:
           GLSLC="$(command -v glslc)"
           test -x "$GLSLC"
           SPIRV_CFG="$(find /usr -type f \( -name 'SPIRV-HeadersConfig.cmake' -o -name 'SPIRV-Headers-config.cmake' \) -print -quit)"
-          if [ -z "$SPIRV_CFG" ]; then
-            echo 'Ubuntu package did not expose the SPIRV-Headers CMake config; building headers package from source.'
+          SPIRV_HEADER="$(dpkg -L spirv-headers 2>/dev/null | grep -E '/spirv/unified1/spirv\.hpp$' | head -n 1 || true)"
+          if [ -z "$SPIRV_CFG" ] || [ -z "$SPIRV_HEADER" ]; then
+            echo 'Ubuntu package is missing SPIRV-Headers CMake config or unified1/spirv.hpp; building headers package from source.'
             git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Headers"
             cmake -S "$RUNNER_TEMP/SPIRV-Headers" -B "$RUNNER_TEMP/SPIRV-Headers-build" \
               -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/spirv-headers-install"
             cmake --build "$RUNNER_TEMP/SPIRV-Headers-build" --parallel 2
             cmake --install "$RUNNER_TEMP/SPIRV-Headers-build"
             SPIRV_CFG="$(find "$RUNNER_TEMP/spirv-headers-install" -type f \( -name 'SPIRV-HeadersConfig.cmake' -o -name 'SPIRV-Headers-config.cmake' \) -print -quit)"
+            SPIRV_HEADER="$RUNNER_TEMP/spirv-headers-install/include/spirv/unified1/spirv.hpp"
           fi
-          if [ -z "$SPIRV_CFG" ]; then
-            echo 'SPIRV-Headers CMake package config is still missing' >&2
+          if [ -z "$SPIRV_CFG" ] || [ -z "$SPIRV_HEADER" ] || [ ! -f "$SPIRV_HEADER" ]; then
+            echo 'SPIRV-Headers config or spirv/unified1/spirv.hpp is still missing' >&2
+            find /usr/include "$RUNNER_TEMP/spirv-headers-install" -path '*/spirv/unified1/spirv.hpp' -print 2>/dev/null || true
             exit 1
           fi
+          SPIRV_INCLUDE="${SPIRV_HEADER%/spirv/unified1/spirv.hpp}"
+          test -f "$SPIRV_INCLUDE/spirv/unified1/spirv.hpp"
           echo "VULKAN_GLSLC_EXECUTABLE=$GLSLC" >> "$GITHUB_ENV"
           echo "SPIRV_HEADERS_DIR=$(dirname "$SPIRV_CFG")" >> "$GITHUB_ENV"
+          echo "SPIRV_HEADERS_INCLUDE_DIR=$SPIRV_INCLUDE" >> "$GITHUB_ENV"
+          echo "SPIRV-Headers C++ include root: $SPIRV_INCLUDE"
 
       - name: Fetch official Khronos Vulkan-Headers (including Vulkan-Hpp)
         shell: bash
@@ -152,26 +159,30 @@ jobs:
           fi
           test -x "$VULKAN_GLSLC_EXECUTABLE"
           test -d "$SPIRV_HEADERS_DIR"
+          test -f "$SPIRV_HEADERS_INCLUDE_DIR/spirv/unified1/spirv.hpp"
 
-          # The Android NDK has the C Vulkan headers, but does not provide
-          # vulkan/vulkan.hpp (Vulkan-Hpp). ggml-vulkan.cpp includes that file.
-          # Compile a tiny translation unit with the exact Android ARM64 target
-          # before kicking off the full Gradle/Ninja build.
-          cat > "$RUNNER_TEMP/vulkan_hpp_smoke.cpp" <<'EOF'
+          # The Vulkan backend needs two independent Khronos header sets:
+          # Vulkan-Headers provides vulkan/vulkan.hpp; SPIRV-Headers provides
+          # spirv/unified1/spirv.hpp. Smoke-compile both with Android ARM64.
+          cat > "$RUNNER_TEMP/android_vulkan_headers_smoke.cpp" <<'EOF'
           #include <vulkan/vulkan.hpp>
-          int main() { return VK_HEADER_VERSION > 0 ? 0 : 1; }
+          #include <spirv/unified1/spirv.hpp>
+          int main() { return (VK_HEADER_VERSION > 0 && spv::MagicNumber == 0x07230203) ? 0 : 1; }
           EOF
           "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" \
             --target=aarch64-none-linux-android24 \
             --sysroot="$SYSROOT" \
-            -std=c++17 -I"$VULKAN_INCLUDE_DIR" \
-            -fsyntax-only "$RUNNER_TEMP/vulkan_hpp_smoke.cpp"
+            -std=c++17 \
+            -I"$VULKAN_INCLUDE_DIR" \
+            -I"$SPIRV_HEADERS_INCLUDE_DIR" \
+            -fsyntax-only "$RUNNER_TEMP/android_vulkan_headers_smoke.cpp"
 
           echo "VULKAN_LIBRARY=$VULKAN_LIB" >> "$GITHUB_ENV"
           echo "Android Vulkan C/C++ headers: $VULKAN_INCLUDE_DIR (Khronos Vulkan-Headers)"
           echo "Android Vulkan loader stub: $VULKAN_LIB"
           echo "Host shader compiler: $VULKAN_GLSLC_EXECUTABLE"
           echo "SPIR-V CMake package: $SPIRV_HEADERS_DIR"
+          echo "SPIR-V C++ include root: $SPIRV_HEADERS_INCLUDE_DIR"
 
       - name: Build Vulkan-enabled Android AAR
         shell: bash
@@ -195,7 +206,7 @@ jobs:
             \( -name CMakeCache.txt -o -name build.ninja \) -print | sort || true
           echo "Effective Vulkan/CPU cache values:"
           find upstream/llama-android -type f -name CMakeCache.txt -print0 \
-            | xargs -0 -r grep -H -E '^(GGML_VULKAN|GGML_CPU|GGML_BACKEND_DL|BUILD_SHARED_LIBS):' || true
+            | xargs -0 -r grep -H -E '^(GGML_VULKAN|GGML_CPU|GGML_BACKEND_DL|BUILD_SHARED_LIBS|SPIRV_HEADERS_INCLUDE_DIR):' || true
           echo "Built ggml Vulkan/CPU shared backend outputs:"
           find upstream/llama-android -type f \
             \( -iname '*ggml*vulkan*' -o -iname '*ggml*cpu*' \) -print | sort | head -n 120 || true
@@ -206,7 +217,7 @@ jobs:
           echo "Initial AAR native entries (ordinary shared Vulkan/CPU backends must be packaged):"
           unzip -l upstream/llama-android/library/build/outputs/aar/library-release.aar | grep -E 'jni/arm64-v8a/.*\.so' || true
           echo "Vulkan references in Gradle build log:"
-          grep -n -i -E 'GGML_VULKAN|GGML_BACKEND_DL|BUILD_SHARED_LIBS|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR|vulkan.hpp' vulkan-aar-build.log | tail -n 120 || true
+          grep -n -i -E 'GGML_VULKAN|GGML_BACKEND_DL|BUILD_SHARED_LIBS|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR|SPIRV_HEADERS_INCLUDE_DIR|vulkan.hpp|spirv.hpp' vulkan-aar-build.log | tail -n 160 || true
 
       - name: Verify AAR and package native runtime
         shell: bash
@@ -220,6 +231,7 @@ jobs:
             --build-log vulkan-aar-build.log \
             --ndk-version "$ANDROID_NDK_VERSION" \
             --spirv-headers-dir "$SPIRV_HEADERS_DIR" \
+            --spirv-headers-include-dir "$SPIRV_HEADERS_INCLUDE_DIR" \
             --vulkan-include-dir "$VULKAN_INCLUDE_DIR" \
             --vulkan-headers-commit "$VULKAN_HEADERS_COMMIT" \
             --glslc "$VULKAN_GLSLC_EXECUTABLE"

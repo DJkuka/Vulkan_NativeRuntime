@@ -19,7 +19,7 @@ Upstream задаёт `-DGGML_VULKAN=OFF` в `library/build.gradle.kts`. Одн�
 1. В `library/build.gradle.kts` выставляет `GGML_VULKAN=ON`, `GGML_CPU=ON`, `GGML_BACKEND_DL=OFF` и `BUILD_SHARED_LIBS=ON`.
 2. В `library/src/main/jni/CMakeLists.txt` вставляет блок `set(... CACHE ... FORCE)` непосредственно перед `add_subdirectory(... llama.cpp)`.
 3. В самом `llama.cpp/ggml` патчер находит реальный `option(GGML_VULKAN ... OFF)`, меняет default на `ON` и вставляет `set(GGML_VULKAN ON CACHE BOOL ... FORCE)` перед этой декларацией. Также изменяются возможные явные `set(GGML_VULKAN OFF ...)` в CMake-файлах submodule.
-4. В родительском JNI CMake явно добавляется `include_directories(BEFORE SYSTEM "$ENV{VULKAN_INCLUDE_DIR}")`, чтобы `vulkan/vulkan.hpp` гарантированно был виден `ggml-vulkan.cpp`, даже если импортированная цель `Vulkan::Vulkan` не передаст include-путь.
+4. В родительском JNI CMake явно добавляются оба include-root через `include_directories(BEFORE SYSTEM ...)`: `$ENV{VULKAN_INCLUDE_DIR}` для `vulkan/vulkan.hpp` и `$ENV{SPIRV_HEADERS_INCLUDE_DIR}` для `spirv/unified1/spirv.hpp`. Это нужно даже при успешном `find_package(SPIRV-Headers CONFIG REQUIRED)`: обнаружение package config само по себе не гарантирует, что include-каталог попадёт в compile flags цели `ggml-vulkan`.
 
 Третий уровень нужен из-за последнего лога: даже после исправления Gradle и родительского JNI CMake в реальном `.cxx/.../CMakeCache.txt` оставалось `GGML_VULKAN=OFF`. Теперь значение принудительно выставляется непосредственно в том CMake-файле, который объявляет опцию ggml.
 
@@ -67,12 +67,14 @@ AAR может не включить часть транзитивных native 
 Workflow:
 
 - устанавливает JDK 17, Android SDK, NDK r27c и CMake 3.22.1;
-- устанавливает host `glslc` и SPIR-V headers;
+- устанавливает host `glslc`, SPIRV-Headers package config и отдельный include-каталог SPIR-V headers;
 - загружает официальный Khronos Vulkan-Headers `v1.3.290` (закреплённый commit), потому что Android NDK r27c содержит `vulkan/vulkan.h`, но не содержит C++-обёртку `vulkan/vulkan.hpp`, которую включает `ggml-vulkan.cpp`;
-- выполняет regression-тест конфигурации headers и отдельную Android ARM64 compile-smoke проверку `#include <vulkan/vulkan.hpp>` до полной сборки;
+- отдельно устанавливает SPIRV-Headers: это другой репозиторий Khronos, он предоставляет `spirv/unified1/spirv.hpp`. Vulkan-Headers не содержит этот файл;
+- явно передаёт оба include-root в родительский JNI CMake через `include_directories(BEFORE SYSTEM ...)`. Это обходит обнаруженную проблему upstream: `find_package(SPIRV-Headers)` находит CMake package, но его include path не попадает в compile flags цели `ggml-vulkan` в данном Android build;
+- выполняет regression-тест конфигурации headers и отдельную Android ARM64 compile-smoke проверку обоих include: `vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp` до полной сборки;
 - клонирует `ffmpegkit-maintained/llama-android` вместе с закреплённым submodule `llama.cpp` и проверяет tag `b9878`;
 - патчит Gradle CMake args, JNI `CMakeLists.txt` и фактическую декларацию `option(GGML_VULKAN ...)` в ggml;
-- передаёт Khronos Vulkan-Headers `include/` как `Vulkan_INCLUDE_DIR`, Android NDK loader stub как `Vulkan_LIBRARY`, а также host shader compiler и SPIRV-Headers;
+- передаёт Khronos Vulkan-Headers `include/` как `Vulkan_INCLUDE_DIR`, SPIRV-Headers `include/` как `SPIRV_HEADERS_INCLUDE_DIR`, Android NDK loader stub как `Vulkan_LIBRARY`, а также host shader compiler и путь к SPIRV-Headers CMake package;
 - удаляет старые `.cxx` cache и выполняет `:library:assembleRelease`;
 - печатает фактический CMake cache, Ninja graph, найденные backend build outputs и ELF dependencies;
 - при необходимости добавляет shared backend `.so` из этого же ARM64 build в AAR;
@@ -89,8 +91,8 @@ Actions не должен опубликовать runtime как успешны
 5. `readelf` подтверждает AArch64 ELF64 для всех `.so`.
 6. `libggml.so` содержит `DT_NEEDED` для `libggml-vulkan.so` и CPU backend.
 7. `libggml-vulkan.so` содержит `DT_NEEDED` для Android `libvulkan.so`.
-8. Реальный CMakeCache указывает `Vulkan_INCLUDE_DIR` на каталог Khronos Vulkan-Headers, в котором присутствует `vulkan/vulkan.hpp`.
-9. До NDK-сборки успешна отдельная компиляция C++-проверки `#include <vulkan/vulkan.hpp>` для `aarch64-none-linux-android24`.
+8. Реальный CMakeCache указывает `Vulkan_INCLUDE_DIR` на каталог Khronos Vulkan-Headers, в котором присутствует `vulkan/vulkan.hpp`, а `SPIRV_HEADERS_INCLUDE_DIR` — на каталог с `spirv/unified1/spirv.hpp`; обе директории передаются в compile options `ggml-vulkan`.
+9. До NDK-сборки успешна отдельная компиляция C++-проверки обоих include (`vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp`) для `aarch64-none-linux-android24`.
 10. В AAR отсутствует собственная копия системной `libvulkan.so`.
 11. Kotlin API `dev.ffmpegkit.llama.Llama` и `LlamaConfig` присутствует в `classes.jar`.
 
@@ -137,3 +139,21 @@ val vulkanConfig = LlamaConfig(contextSize = 2048, threads = 4, gpuLayers = 2)
 - Upstream Gradle build file: https://github.com/ffmpegkit-maintained/llama-android/blob/main/library/build.gradle.kts
 - llama.cpp ggml backend linking: https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/CMakeLists.txt
 - llama.cpp build options: https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md
+
+
+## v8 — явная передача SPIRV-Headers include path
+
+- Причина ошибки v7: `ggml-vulkan.cpp` включает `spirv/unified1/spirv.hpp`, который поставляется не в Vulkan-Headers, а в отдельном Khronos-проекте SPIRV-Headers.
+- Workflow по-прежнему устанавливает пакет SPIRV-Headers и его CMake package config, но теперь отдельно находит фактический header root с `spirv/unified1/spirv.hpp`.
+- JNI CMake сохраняет `SPIRV_HEADERS_INCLUDE_DIR` в CMakeCache и явно добавляет его через `include_directories(BEFORE SYSTEM ...)` до `add_subdirectory(llama.cpp)`. Это обходит случай, когда `find_package(SPIRV-Headers)` находит config, но include directory не попадает в compile flags ggml-vulkan.
+- Android ARM64 smoke test теперь одновременно компилирует Vulkan-Hpp и SPIR-V C++ header.
+- Packaging validator требует точный `SPIRV_HEADERS_INCLUDE_DIR` в реальном CMakeCache и наличие `spirv/unified1/spirv.hpp`.
+
+
+## v8 — явная передача SPIRV-Headers include path
+
+- Причина ошибки v7: `ggml-vulkan.cpp` включает `spirv/unified1/spirv.hpp`, который поставляется отдельным Khronos-проектом SPIRV-Headers, а не Vulkan-Headers.
+- Workflow находит фактический каталог header по пакетному списку `spirv-headers`; если apt package или CMake config неполны, собирает и устанавливает официальный SPIRV-Headers из исходников.
+- JNI CMake сохраняет `SPIRV_HEADERS_INCLUDE_DIR` в CMakeCache и явно добавляет его через `include_directories(BEFORE SYSTEM ...)` до `add_subdirectory(llama.cpp)`. Это обходит случай, когда `find_package(SPIRV-Headers)` находит config, но include path не попадает в compile flags `ggml-vulkan`.
+- ARM64 smoke test теперь проверяет одновременно `vulkan/vulkan.hpp` и `spirv/unified1/spirv.hpp`.
+- Packaging validator требует точный SPIRV include root в Android CMakeCache и проверяет физическое наличие заголовка.
