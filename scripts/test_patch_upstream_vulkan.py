@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Offline regression tests for patch_upstream_vulkan.py."""
+"""Offline regression tests for the Android Vulkan CMake argument patcher."""
 from __future__ import annotations
-
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -19,34 +18,32 @@ def run_case(source: str) -> str:
         target = root / "library" / "build.gradle.kts"
         target.parent.mkdir(parents=True)
         target.write_text(source, encoding="utf-8")
-        result = module.main_for_test(root)
-        assert result == 0, f"patcher failed with exit {result}"
+        assert module.main_for_test(root) == 0
         patched = target.read_text(encoding="utf-8")
-        # Idempotence: a second pass must preserve file bytes.
         before = patched
-        result = module.main_for_test(root)
-        assert result == 0
+        assert module.main_for_test(root) == 0
         assert target.read_text(encoding="utf-8") == before
         return patched
 
 
-UPSTREAM_STYLE = '''android {\n  defaultConfig {\n    externalNativeBuild {\n      cmake {\n        arguments += listOf(\n          "-DANDROID_STL=c++_shared",\n          "-DGGML_OPENMP=OFF", // CPU\n          "-DGGML_VULKAN=OFF", // comment may change\n          "-DLLAMA_CURL=OFF",\n        )\n      }\n    }\n  }\n}\n'''
+UPSTREAM_STYLE = '''android {\n  defaultConfig {\n    externalNativeBuild {\n      cmake {\n        arguments += listOf(\n          "-DANDROID_STL=c++_shared",\n          "-DGGML_OPENMP=OFF", // CPU\n          "-DGGML_VULKAN=OFF", // comment may change\n          "-DGGML_BACKEND_DL=ON",\n          "-DBUILD_SHARED_LIBS=OFF",\n          "-DLLAMA_CURL=OFF",\n        )\n      }\n    }\n  }\n}\n'''
 
 NO_VULKAN_STYLE = '''android {\n  defaultConfig {\n    externalNativeBuild {\n      cmake {\n        arguments += listOf(\n          "-DANDROID_STL=c++_shared",\n          "-DGGML_OPENMP=OFF",\n        )\n      }\n    }\n  }\n}\n'''
 
 
 def main() -> None:
     a = run_case(UPSTREAM_STYLE)
-    assert '"-DGGML_VULKAN=ON"' in a
-    assert '"-DGGML_VULKAN=OFF"' not in a
-    assert '"-DGGML_BACKEND_DL=ON"' in a
-    assert '"-DBUILD_SHARED_LIBS=OFF"' in a
+    for expected in ('"-DGGML_VULKAN=ON"', '"-DGGML_BACKEND_DL=OFF"', '"-DBUILD_SHARED_LIBS=ON"'):
+        assert expected in a, expected
+    for wrong in ('"-DGGML_VULKAN=OFF"', '"-DGGML_BACKEND_DL=ON"', '"-DBUILD_SHARED_LIBS=OFF"'):
+        assert wrong not in a, wrong
     assert '"-DVulkan_INCLUDE_DIR=${System.getenv("VULKAN_INCLUDE_DIR") ?: ""}"' in a
     b = run_case(NO_VULKAN_STYLE)
-    assert '"-DGGML_VULKAN=ON"' in b
-    print("PASS: OFF value replaced despite comment variation")
-    print("PASS: missing Vulkan option inserted into CMake listOf")
-    print("PASS: repeated patch runs are idempotent")
+    for expected in ('"-DGGML_VULKAN=ON"', '"-DGGML_BACKEND_DL=OFF"', '"-DBUILD_SHARED_LIBS=ON"'):
+        assert expected in b, expected
+    print("PASS: conflicting OFF/ON values normalized to required shared-link configuration")
+    print("PASS: missing Vulkan options inserted into the CMake arguments list")
+    print("PASS: patch is idempotent")
 
 
 if __name__ == "__main__":

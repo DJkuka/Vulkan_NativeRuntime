@@ -1,15 +1,17 @@
-# Technical notes
+# Технические заметки — Vulkan Native Runtime v5
 
-- Goal: build the upstream `llama-android` AAR with the same Kotlin API as the CPU package, but with llama.cpp Vulkan backend enabled.
-- Native backend source is the upstream pinned `llama.cpp` git submodule, not an unrelated custom JNI runtime.
-- Main patch: locate `GGML_VULKAN` by CMake option name (replace OFF, preserve ON, or insert if absent); add Android NDK Vulkan include and loader stub, host `glslc`, SPIRV-Headers CMake package; `GGML_BACKEND_DL=ON`; `BUILD_SHARED_LIBS=OFF` to build separate dynamically loadable Vulkan and CPU backend plugins.
-- Outputs: AAR, extracted ARM64 native bundle, build manifest with upstream/submodule commits, CMake cache evidence, ELF dynamic dependencies, and SHA-256.
-- The workflow fails if GGML_VULKAN is not ON, the CMake graph does not contain ggml-vulkan, JNI library is missing, Vulkan system loader is not a DT_NEEDED dependency, or an app-bundled `libvulkan.so` is found.
-- No GGUF model, APK signing key, or Tap Translate base APK is included.
+- Основа: upstream `ffmpegkit-maintained/llama-android`, pinned `llama.cpp` submodule `b9878`.
+- Конфигурация: `GGML_VULKAN=ON`, `BUILD_SHARED_LIBS=ON`, `GGML_BACKEND_DL=OFF`.
+- Почему так: CMake ggml прямо указывает, что `GGML_BACKEND_DL` требует `BUILD_SHARED_LIBS`; динамические plugins типа `MODULE` в upstream пишутся в CMAKE_RUNTIME_OUTPUT_DIRECTORY и не всегда автоматически попадают в Android AAR. Для Android мы отключаем plugin dlopen mode и собираем backend targets как обычные shared libraries, связанные через `libggml.so`.
+- Expected ELF chain: `libggml.so` → `libggml-vulkan.so` and `libggml-cpu.so`; `libggml-vulkan.so` → Android system `libvulkan.so`.
+- Packaging: сначала проверить AAR jni entries, затем при необходимости добавить missing shared backend outputs, взятые строго из того же upstream CMake build и прошедшие ELF AArch64 check. Не копировать host/Linux .so и никогда не упаковывать system `libvulkan.so`.
+- Outputs: Vulkan-enabled AAR, standalone ARM64 .so bundle, manifest with CMake cache/Gradle args/ELF deps and SHA-256.
+- No model GGUF, APK signing key, or Tap Translate base APK included.
 
+## История исправлений
 
-- 2026-11-09 fix: patcher no longer matches the whole comment-bearing source line. It handles whitespace/comment changes, absent/upstream-already-ON variants, and is idempotent. Offline tests run in CI before cloning upstream.
-
-
-- 2026-11-09 fix v3: package verifier scans the full upstream checkout for CMakeCache and Ninja graph locations.
-- 2026-11-09 fix v4: switch from static backend linkage to `GGML_BACKEND_DL=ON`. The AAR must contain `libggml-vulkan.so` and `libggml-cpu*.so`; `libggml-vulkan.so` itself must carry `DT_NEEDED libvulkan.so`. This avoids incorrectly looking for a Vulkan dependency on `libllama_jni.so` when the backend is a separate dynamically loaded plugin.
+- v1: initial patch attempt was too strict about upstream Gradle formatting.
+- v2: match CMake options by name and make patch idempotent.
+- v3: broaden CMake cache/Ninja graph discovery.
+- v4: tried `GGML_BACKEND_DL=ON` with `BUILD_SHARED_LIBS=OFF`; this was an invalid/contradictory configuration for ggml backend modules and did not package `libggml-vulkan.so` in AAR.
+- v5: use shared-linked backend mode. Patcher enforces the three CMake values; packaging step collects missing backend .so from this same CMake output and injects them into canonical AAR `jni/arm64-v8a/`, then verifies the ELF dependency chain.

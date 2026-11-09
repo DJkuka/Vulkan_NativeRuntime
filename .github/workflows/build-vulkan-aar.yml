@@ -72,6 +72,9 @@ jobs:
       - name: Test upstream patcher (format and idempotence)
         run: python3 scripts/test_patch_upstream_vulkan.py
 
+      - name: Test AAR backend packaging (same-build outputs only)
+        run: python3 scripts/test_package_vulkan_runtime.py
+
       - name: Fetch upstream llama-android and pinned llama.cpp submodule
         shell: bash
         run: |
@@ -141,10 +144,16 @@ jobs:
           echo "GGML_VULKAN cache values:"
           find upstream/llama-android -type f -name CMakeCache.txt -print0 \
             | xargs -0 -r grep -H -E '^GGML_VULKAN:' || true
-          echo "Dynamic backend outputs in AAR (expected Vulkan + CPU modules):"
-          unzip -l upstream/llama-android/library/build/outputs/aar/library-release.aar | grep -E 'jni/arm64-v8a/libggml-(vulkan|cpu).*\.so' || true
+          echo "Shared backend build outputs (expected Vulkan + CPU .so):"
+          find upstream/llama-android -type f             \( -name 'libggml-vulkan.so' -o -name 'libggml-cpu*.so' \) -print | sort || true
+          while IFS= read -r so; do
+            echo "--- $so"
+            readelf -d "$so" | grep -E 'NEEDED|SONAME' || true
+          done < <(find upstream/llama-android -type f \( -name 'libggml-vulkan.so' -o -name 'libggml-cpu*.so' \) -print)
+          echo "Initial AAR native entries (backend dependencies may be injected by the packaging step):"
+          unzip -l upstream/llama-android/library/build/outputs/aar/library-release.aar | grep -E 'jni/arm64-v8a/.*\.so' || true
           echo "Vulkan references in Gradle build log:"
-          grep -n -i -E 'GGML_VULKAN|GGML_BACKEND_DL|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR' vulkan-aar-build.log | tail -n 120 || true
+          grep -n -i -E 'GGML_VULKAN|GGML_BACKEND_DL|BUILD_SHARED_LIBS|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR' vulkan-aar-build.log | tail -n 120 || true
 
       - name: Verify AAR and package native runtime
         shell: bash
