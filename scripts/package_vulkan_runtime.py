@@ -133,7 +133,8 @@ def patch_aar_with_build_backends(aar: Path, upstream: Path) -> list[str]:
         return sorted(additions)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Build CLI parser with filesystem arguments converted to pathlib.Path."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--aar", required=True, type=Path)
     parser.add_argument("--upstream", required=True, type=Path)
@@ -144,10 +145,14 @@ def main() -> int:
     parser.add_argument("--spirv-headers-dir", required=True)
     parser.add_argument("--spirv-headers-include-dir", required=True, type=Path)
     parser.add_argument("--spirv-headers-commit", required=True)
-    parser.add_argument("--vulkan-include-dir", required=True)
+    parser.add_argument("--vulkan-include-dir", required=True, type=Path)
     parser.add_argument("--vulkan-headers-commit", required=True)
     parser.add_argument("--glslc", required=True)
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     if not args.aar.is_file():
         raise SystemExit(f"AAR missing: {args.aar}")

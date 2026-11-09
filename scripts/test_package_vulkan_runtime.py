@@ -23,6 +23,24 @@ def main() -> None:
     assert "SPIRV_HEADERS_INCLUDE_DIR" in packager_source
     assert "spirv/unified1/spirv.hpp" in packager_source
 
+    cli_args = module.build_parser().parse_args([
+        "--aar", "out/library.aar",
+        "--upstream", "upstream/llama-android",
+        "--out", "dist/runtime",
+        "--cmake-cache-root", "upstream/llama-android",
+        "--build-log", "build.log",
+        "--ndk-version", "27.2.12479018",
+        "--spirv-headers-dir", "spirv-headers-src",
+        "--spirv-headers-include-dir", "spirv-headers-install/include",
+        "--spirv-headers-commit", "2acb319af38d43be3ea76bfabf3998e5281d8d12",
+        "--vulkan-include-dir", "vulkan-headers/include",
+        "--vulkan-headers-commit", "b379292b2ab6df5771ba9870d53cf8b2c9295daf",
+        "--glslc", "/usr/bin/glslc",
+    ])
+    assert isinstance(cli_args.vulkan_include_dir, Path)
+    assert isinstance(cli_args.spirv_headers_include_dir, Path)
+    assert cli_args.vulkan_include_dir == Path("vulkan-headers/include")
+
     graph = (
         "build ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o: CXX_COMPILER\n"
         "build ggml/src/ggml-cpu/CMakeFiles/ggml-cpu.dir/ggml-cpu.c.o: C_COMPILER\n"

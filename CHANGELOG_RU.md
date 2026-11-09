@@ -46,3 +46,11 @@
 - SPIRV-Headers берётся из закреплённого Khronos tag `vulkan-sdk-1.3.290.0` / commit `2acb319af38d43be3ea76bfabf3998e5281d8d12` и устанавливается в `$RUNNER_TEMP/spirv-headers-install`.
 - Добавлен анализ `compile_commands.json`, который требует фактическое присутствие Vulkan-Headers и SPIRV-Headers путей в Android smoke compile command.
 - Packaging manifest сохраняет commit SPIRV-Headers; validator отклоняет системный `/usr/include` как SPIRV include root.
+
+
+## v11 — исправление типа CLI-пути Vulkan-Headers
+
+- Ошибка v10: `--vulkan-include-dir` разбирался argparse как обычная строка, но упаковщик вызывал `args.vulkan_include_dir.resolve()`, что приводило к `AttributeError`.
+- Аргумент теперь объявлен с `type=Path`, как остальные filesystem-пути. CLI вынесен в `build_parser()` для прямого регрессионного тестирования.
+- Добавлен тест реального разбора всех обязательных аргументов: оба Vulkan/SPIR-V include пути обязаны приходить как `pathlib.Path`.
+- Проверка не ослаблена: заголовки, реальные CMakeCache/Ninja targets, ELF AArch64 и DT_NEEDED продолжают проверяться прежним образом.

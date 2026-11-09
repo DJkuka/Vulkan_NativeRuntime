@@ -176,3 +176,8 @@ val vulkanConfig = LlamaConfig(contextSize = 2048, threads = 4, gpuLayers = 2)
 В v10 SPIRV-Headers больше не берётся из системного apt-пакета. Workflow клонирует Khronos tag `vulkan-sdk-1.3.290.0`, проверяет commit `2acb319af38d43be3ea76bfabf3998e5281d8d12`, устанавливает проект в `$RUNNER_TEMP/spirv-headers-install` и задаёт include root `$RUNNER_TEMP/spirv-headers-install/include`. Это нестандартный staged path, который должен явно присутствовать в compile command.
 
 Дополнительно добавлен `verify_android_smoke_compile_commands.py`: после CMake configure он читает `compile_commands.json` и требует наличие обоих точных include roots в команде компиляции `android_vulkan_header_smoke.cpp`. Проверка отдельно отклоняет `/usr/include`. Такой же staged `SPIRV_HEADERS_INCLUDE_DIR` передаётся в JNI CMake и используется реальной целью `ggml-vulkan`.
+
+
+## v11 — исправление упаковщика после ошибки AttributeError
+
+В v10 аргумент `--vulkan-include-dir` был объявлен без `type=Path`, хотя ниже использовался как объект `Path` (`.resolve()`). Это вызывало `AttributeError: 'str' object has no attribute 'resolve'` до выполнения проверок AAR. В v11 CLI вынесен в `build_parser()`, а `--vulkan-include-dir` получает `type=Path`. Добавлен regression-тест разбора аргументов: и `--vulkan-include-dir`, и `--spirv-headers-include-dir` должны быть объектами `pathlib.Path`. Критерии Vulkan-проверки не ослаблялись.

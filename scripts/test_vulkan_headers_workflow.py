@@ -34,7 +34,7 @@ def main() -> None:
     assert 'cmake --build "$RUNNER_TEMP/android-vulkan-header-smoke-build" --verbose' in workflow
     assert 'clang++" \\\n            --target=aarch64-none-linux-android24' not in workflow
     assert 'include_directories(BEFORE SYSTEM "$ENV{VULKAN_INCLUDE_DIR}")' in patcher
-    assert 'parser.add_argument("--vulkan-include-dir", required=True)' in packager
+    assert 'parser.add_argument("--vulkan-include-dir", required=True, type=Path)' in packager
     assert 'parser.add_argument("--vulkan-headers-commit", required=True)' in packager
     assert '"vulkan_headers_commit": args.vulkan_headers_commit' in packager
     assert 'if(NOT ANDROID)' in smoke_cmake
