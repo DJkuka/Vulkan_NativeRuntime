@@ -73,6 +73,7 @@ def main() -> None:
     assert cmake.index('set(GGML_VULKAN OFF CACHE BOOL "disable" FORCE)') < cmake.index(module.CMAKE_MARKER_BEGIN)
     assert cmake.index(module.CMAKE_MARKER_BEGIN) < cmake.index("add_subdirectory(")
     assert '"$ENV{VULKAN_LIBRARY}" CACHE FILEPATH' in cmake
+    assert 'include_directories(BEFORE SYSTEM "$ENV{VULKAN_INCLUDE_DIR}")' in cmake
     assert module.GGML_MARKER_BEGIN in ggml
     assert 'set(GGML_VULKAN ON CACHE BOOL "Enable ggml Vulkan backend for Android" FORCE)' in ggml
     assert ggml.index(module.GGML_MARKER_BEGIN) < ggml.index('option(GGML_VULKAN')
@@ -82,7 +83,8 @@ def main() -> None:
     print("PASS: JNI CMake FORCE block precedes llama.cpp subdirectory")
     print("PASS: ggml's actual option() declaration is forced ON and default OFF is removed")
     print("PASS: real CMake configure overrides a conflicting -DGGML_VULKAN=OFF and writes ON to CMakeCache")
-    print("PASS: Vulkan paths forwarded from Android NDK/host toolchain")
+    print("PASS: Vulkan-Hpp include path explicitly propagated to all JNI subprojects")
+    print("PASS: Vulkan loader stub and host glslc/SPIR-V paths forwarded")
     print("PASS: patch remains idempotent")
 
 

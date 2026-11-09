@@ -6,6 +6,10 @@
 
 Цель — получить AAR и отдельный набор ARM64 `.so`, в котором llama.cpp действительно собран с `GGML_VULKAN=ON`, а CPU backend остаётся включённым.
 
+## Исправление ошибки `vulkan/vulkan.hpp` (v7.1)
+
+Предыдущая сборка дошла до `ggml-vulkan.cpp`, но остановилась с `fatal error: 'vulkan/vulkan.hpp' file not found`. Это ожидаемое различие: NDK r27c содержит C Vulkan header `vulkan/vulkan.h`, но не поставляет C++ binding Vulkan-Hpp. В v7 workflow отдельно загружает KhronosGroup/Vulkan-Headers tag `v1.3.290`, закреплённый commit `b379292b2ab6df5771ba9870d53cf8b2c9295daf`, и передаёт его `include/` в CMake через `Vulkan_INCLUDE_DIR`. Родительский JNI CMake также явно добавляет этот каталог через `include_directories(BEFORE SYSTEM ...)`, чтобы путь гарантированно получил `ggml-vulkan.cpp`. Android NDK по-прежнему используется для `libvulkan.so` loader stub. До основной сборки выполняется ARM64 NDK smoke compile, который включает именно `vulkan/vulkan.hpp`. Packaging validator дополнительно требует, чтобы реальный CMakeCache ссылался на тот же Vulkan-Headers include path.
+
 ## Что было не так в предыдущих версиях
 
 Upstream задаёт `-DGGML_VULKAN=OFF` в `library/build.gradle.kts`. Одной правки Gradle-аргумента оказалось недостаточно: в реальном CMake cache пользователя продолжало оставаться `GGML_VULKAN:BOOL=OFF`.
@@ -15,6 +19,7 @@ Upstream задаёт `-DGGML_VULKAN=OFF` в `library/build.gradle.kts`. Одн�
 1. В `library/build.gradle.kts` выставляет `GGML_VULKAN=ON`, `GGML_CPU=ON`, `GGML_BACKEND_DL=OFF` и `BUILD_SHARED_LIBS=ON`.
 2. В `library/src/main/jni/CMakeLists.txt` вставляет блок `set(... CACHE ... FORCE)` непосредственно перед `add_subdirectory(... llama.cpp)`.
 3. В самом `llama.cpp/ggml` патчер находит реальный `option(GGML_VULKAN ... OFF)`, меняет default на `ON` и вставляет `set(GGML_VULKAN ON CACHE BOOL ... FORCE)` перед этой декларацией. Также изменяются возможные явные `set(GGML_VULKAN OFF ...)` в CMake-файлах submodule.
+4. В родительском JNI CMake явно добавляется `include_directories(BEFORE SYSTEM "$ENV{VULKAN_INCLUDE_DIR}")`, чтобы `vulkan/vulkan.hpp` гарантированно был виден `ggml-vulkan.cpp`, даже если импортированная цель `Vulkan::Vulkan` не передаст include-путь.
 
 Третий уровень нужен из-за последнего лога: даже после исправления Gradle и родительского JNI CMake в реальном `.cxx/.../CMakeCache.txt` оставалось `GGML_VULKAN=OFF`. Теперь значение принудительно выставляется непосредственно в том CMake-файле, который объявляет опцию ggml.
 
@@ -63,9 +68,11 @@ Workflow:
 
 - устанавливает JDK 17, Android SDK, NDK r27c и CMake 3.22.1;
 - устанавливает host `glslc` и SPIR-V headers;
+- загружает официальный Khronos Vulkan-Headers `v1.3.290` (закреплённый commit), потому что Android NDK r27c содержит `vulkan/vulkan.h`, но не содержит C++-обёртку `vulkan/vulkan.hpp`, которую включает `ggml-vulkan.cpp`;
+- выполняет regression-тест конфигурации headers и отдельную Android ARM64 compile-smoke проверку `#include <vulkan/vulkan.hpp>` до полной сборки;
 - клонирует `ffmpegkit-maintained/llama-android` вместе с закреплённым submodule `llama.cpp` и проверяет tag `b9878`;
 - патчит Gradle CMake args, JNI `CMakeLists.txt` и фактическую декларацию `option(GGML_VULKAN ...)` в ggml;
-- передаёт Android NDK Vulkan headers/loader stub и host shader compiler;
+- передаёт Khronos Vulkan-Headers `include/` как `Vulkan_INCLUDE_DIR`, Android NDK loader stub как `Vulkan_LIBRARY`, а также host shader compiler и SPIRV-Headers;
 - удаляет старые `.cxx` cache и выполняет `:library:assembleRelease`;
 - печатает фактический CMake cache, Ninja graph, найденные backend build outputs и ELF dependencies;
 - при необходимости добавляет shared backend `.so` из этого же ARM64 build в AAR;
@@ -82,8 +89,10 @@ Actions не должен опубликовать runtime как успешны
 5. `readelf` подтверждает AArch64 ELF64 для всех `.so`.
 6. `libggml.so` содержит `DT_NEEDED` для `libggml-vulkan.so` и CPU backend.
 7. `libggml-vulkan.so` содержит `DT_NEEDED` для Android `libvulkan.so`.
-8. В AAR отсутствует собственная копия системной `libvulkan.so`.
-9. Kotlin API `dev.ffmpegkit.llama.Llama` и `LlamaConfig` присутствует в `classes.jar`.
+8. Реальный CMakeCache указывает `Vulkan_INCLUDE_DIR` на каталог Khronos Vulkan-Headers, в котором присутствует `vulkan/vulkan.hpp`.
+9. До NDK-сборки успешна отдельная компиляция C++-проверки `#include <vulkan/vulkan.hpp>` для `aarch64-none-linux-android24`.
+10. В AAR отсутствует собственная копия системной `libvulkan.so`.
+11. Kotlin API `dev.ffmpegkit.llama.Llama` и `LlamaConfig` присутствует в `classes.jar`.
 
 Наличие `GGML_VULKAN=ON` только в Gradle или в тексте лога не считается достаточным доказательством.
 
@@ -119,6 +128,7 @@ val vulkanConfig = LlamaConfig(contextSize = 2048, threads = 4, gpuLayers = 2)
 - Реальный AAR и его `.so` появятся только после успешного workflow.
 - Проверка на Lenovo TB128FU / Adreno 610 возможна только на самом планшете.
 - `libvulkan.so` предоставляется Android; не включай Linux loader из runner в APK/AAR.
+- Vulkan C/C++ headers используются только на этапе компиляции. `vulkan.hpp` не упаковывается в APK/AAR.
 - Это отдельный native-runtime этап. После успешной проверки можно будет заменить CPU AAR в основном Hy-MT2 проекте, не затрагивая OCR/Tesseract/AutoFill/Google Offline Translate.
 
 ## Источники

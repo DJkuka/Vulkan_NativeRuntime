@@ -15,6 +15,8 @@ jobs:
     env:
       ANDROID_NDK_VERSION: '27.2.12479018'
       ANDROID_CMAKE_VERSION: '3.22.1'
+      VULKAN_HEADERS_TAG: 'v1.3.290'
+      VULKAN_HEADERS_COMMIT_PIN: 'b379292b2ab6df5771ba9870d53cf8b2c9295daf'
 
     steps:
       - name: Checkout this build recipe
@@ -49,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential ninja-build pkg-config glslc spirv-headers libvulkan-dev
+          sudo apt-get install -y build-essential ninja-build pkg-config glslc spirv-headers
           GLSLC="$(command -v glslc)"
           test -x "$GLSLC"
           SPIRV_CFG="$(find /usr -type f \( -name 'SPIRV-HeadersConfig.cmake' -o -name 'SPIRV-Headers-config.cmake' \) -print -quit)"
@@ -69,11 +71,36 @@ jobs:
           echo "VULKAN_GLSLC_EXECUTABLE=$GLSLC" >> "$GITHUB_ENV"
           echo "SPIRV_HEADERS_DIR=$(dirname "$SPIRV_CFG")" >> "$GITHUB_ENV"
 
+      - name: Fetch official Khronos Vulkan-Headers (including Vulkan-Hpp)
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$VULKAN_HEADERS_TAG" \
+            https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/Vulkan-Headers"
+          VKH_INCLUDE="$RUNNER_TEMP/Vulkan-Headers/include"
+          test -f "$VKH_INCLUDE/vulkan/vulkan.h"
+          test -f "$VKH_INCLUDE/vulkan/vulkan.hpp"
+          test -f "$VKH_INCLUDE/vulkan/vulkan_core.h"
+          VKH_COMMIT="$(git -C "$RUNNER_TEMP/Vulkan-Headers" rev-parse HEAD)"
+          if [ "$VKH_COMMIT" != "$VULKAN_HEADERS_COMMIT_PIN" ]; then
+            echo "Unexpected Vulkan-Headers revision: $VKH_COMMIT (expected $VULKAN_HEADERS_COMMIT_PIN)" >&2
+            exit 1
+          fi
+          echo "VULKAN_INCLUDE_DIR=$VKH_INCLUDE" >> "$GITHUB_ENV"
+          echo "VULKAN_HEADERS_COMMIT=$VKH_COMMIT" >> "$GITHUB_ENV"
+          echo "Using Khronos Vulkan-Headers tag: $VULKAN_HEADERS_TAG"
+          echo "Using Vulkan-Headers commit: $VKH_COMMIT"
+          echo "C++ Vulkan-Hpp header: $VKH_INCLUDE/vulkan/vulkan.hpp"
+          echo "Pinned Vulkan-Headers SHA-1: $VKH_COMMIT"
+
       - name: Test upstream patcher (format and idempotence)
         run: python3 scripts/test_patch_upstream_vulkan.py
 
       - name: Test AAR backend packaging (same-build outputs only)
         run: python3 scripts/test_package_vulkan_runtime.py
+
+      - name: Test Android Vulkan-Hpp toolchain wiring
+        run: python3 scripts/test_vulkan_headers_workflow.py
 
       - name: Fetch upstream llama-android and pinned llama.cpp submodule
         shell: bash
@@ -115,6 +142,8 @@ jobs:
           set -euo pipefail
           SYSROOT="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           test -f "$SYSROOT/usr/include/vulkan/vulkan.h"
+          test -f "$VULKAN_INCLUDE_DIR/vulkan/vulkan.h"
+          test -f "$VULKAN_INCLUDE_DIR/vulkan/vulkan.hpp"
           VULKAN_LIB="$(find "$SYSROOT/usr/lib/aarch64-linux-android" -name 'libvulkan.so' -print -quit)"
           if [ -z "$VULKAN_LIB" ] || [ ! -f "$VULKAN_LIB" ]; then
             echo "NDK Vulkan loader stub not found under $SYSROOT/usr/lib/aarch64-linux-android" >&2
@@ -123,9 +152,23 @@ jobs:
           fi
           test -x "$VULKAN_GLSLC_EXECUTABLE"
           test -d "$SPIRV_HEADERS_DIR"
-          echo "VULKAN_INCLUDE_DIR=$SYSROOT/usr/include" >> "$GITHUB_ENV"
+
+          # The Android NDK has the C Vulkan headers, but does not provide
+          # vulkan/vulkan.hpp (Vulkan-Hpp). ggml-vulkan.cpp includes that file.
+          # Compile a tiny translation unit with the exact Android ARM64 target
+          # before kicking off the full Gradle/Ninja build.
+          cat > "$RUNNER_TEMP/vulkan_hpp_smoke.cpp" <<'EOF'
+          #include <vulkan/vulkan.hpp>
+          int main() { return VK_HEADER_VERSION > 0 ? 0 : 1; }
+          EOF
+          "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" \
+            --target=aarch64-none-linux-android24 \
+            --sysroot="$SYSROOT" \
+            -std=c++17 -I"$VULKAN_INCLUDE_DIR" \
+            -fsyntax-only "$RUNNER_TEMP/vulkan_hpp_smoke.cpp"
+
           echo "VULKAN_LIBRARY=$VULKAN_LIB" >> "$GITHUB_ENV"
-          echo "Android Vulkan headers: $SYSROOT/usr/include"
+          echo "Android Vulkan C/C++ headers: $VULKAN_INCLUDE_DIR (Khronos Vulkan-Headers)"
           echo "Android Vulkan loader stub: $VULKAN_LIB"
           echo "Host shader compiler: $VULKAN_GLSLC_EXECUTABLE"
           echo "SPIR-V CMake package: $SPIRV_HEADERS_DIR"
@@ -163,7 +206,7 @@ jobs:
           echo "Initial AAR native entries (ordinary shared Vulkan/CPU backends must be packaged):"
           unzip -l upstream/llama-android/library/build/outputs/aar/library-release.aar | grep -E 'jni/arm64-v8a/.*\.so' || true
           echo "Vulkan references in Gradle build log:"
-          grep -n -i -E 'GGML_VULKAN|GGML_BACKEND_DL|BUILD_SHARED_LIBS|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR' vulkan-aar-build.log | tail -n 120 || true
+          grep -n -i -E 'GGML_VULKAN|GGML_BACKEND_DL|BUILD_SHARED_LIBS|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR|vulkan.hpp' vulkan-aar-build.log | tail -n 120 || true
 
       - name: Verify AAR and package native runtime
         shell: bash
@@ -177,6 +220,8 @@ jobs:
             --build-log vulkan-aar-build.log \
             --ndk-version "$ANDROID_NDK_VERSION" \
             --spirv-headers-dir "$SPIRV_HEADERS_DIR" \
+            --vulkan-include-dir "$VULKAN_INCLUDE_DIR" \
+            --vulkan-headers-commit "$VULKAN_HEADERS_COMMIT" \
             --glslc "$VULKAN_GLSLC_EXECUTABLE"
           mkdir -p dist
           cp upstream/llama-android/library/build/outputs/aar/library-release.aar dist/llama-android-vulkan.aar

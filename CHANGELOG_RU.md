@@ -10,3 +10,24 @@
 
 - Added a third configuration layer: patch the actual `option(GGML_VULKAN ...)` declaration in the pinned `llama.cpp/ggml` CMake tree, change its default to ON, and force the cache ON at that declaration. Explicit GGML_VULKAN OFF assignments in CMake sources are normalized to ON.
 - Added a real CMake regression configure with conflicting `-DGGML_VULKAN=OFF`; test requires generated `CMakeCache.txt` to contain `GGML_VULKAN:BOOL=ON`.
+
+
+## v7 — исправлена компиляция Vulkan-Hpp
+
+- Исправлена ошибка `fatal error: vulkan/vulkan.hpp file not found`.
+- Добавлена загрузка официальных Khronos Vulkan-Headers tag `v1.3.290`.
+- `Vulkan_INCLUDE_DIR` теперь указывает на `Vulkan-Headers/include`, а `Vulkan_LIBRARY` остаётся Android NDK loader stub.
+- Удалена зависимость от host `libvulkan-dev` как источника заголовков; host-пакет не должен подменять Android include/library paths.
+- Добавлена предварительная NDK ARM64 smoke-компиляция `#include <vulkan/vulkan.hpp>`.
+- Package validator требует точный `Vulkan_INCLUDE_DIR` из реального Android CMakeCache и сохраняет commit Vulkan-Headers в manifest.
+
+
+## v7.1 — гарантирован Vulkan-Hpp include для ggml-vulkan
+
+- Причина build failure: `ggml-vulkan.cpp` включает `vulkan/vulkan.hpp`, которого нет в Android NDK r27c.
+- Vulkan-Headers tag `v1.3.290` теперь дополнительно закреплён точным commit `b379292b2ab6df5771ba9870d53cf8b2c9295daf`.
+- JNI CMake применяет `include_directories(BEFORE SYSTEM ...)` для загруженного каталога `Vulkan-Headers/include`, явно передавая его всем подпроектам.
+- Smoke test компилирует `vulkan.hpp` с Android ARM64 target; cache validator требует тот же include path.
+
+- Добавлен отдельный offline regression-тест `scripts/test_vulkan_headers_workflow.py`, проверяющий pin, CMake include propagation, smoke-test wiring и manifest provenance.
+- Package validator отклоняет отсутствующий/неполный SHA Vulkan-Headers.

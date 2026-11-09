@@ -49,7 +49,10 @@ set(GGML_OPENMP OFF CACHE BOOL "Avoid OpenMP runtime on Android" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "Disable unsupported llamafile backend on Android" FORCE)
 
 if(DEFINED ENV{VULKAN_INCLUDE_DIR} AND NOT "$ENV{VULKAN_INCLUDE_DIR}" STREQUAL "")
-    set(Vulkan_INCLUDE_DIR "$ENV{VULKAN_INCLUDE_DIR}" CACHE PATH "Android NDK Vulkan headers" FORCE)
+    set(Vulkan_INCLUDE_DIR "$ENV{VULKAN_INCLUDE_DIR}" CACHE PATH "Khronos Vulkan-Headers C and C++ headers" FORCE)
+    # Ensure Vulkan-Hpp is visible to ggml-vulkan.cpp even if a downstream
+    # FindVulkan imported target omits or normalizes its include directories.
+    include_directories(BEFORE SYSTEM "$ENV{VULKAN_INCLUDE_DIR}")
 endif()
 if(DEFINED ENV{VULKAN_LIBRARY} AND NOT "$ENV{VULKAN_LIBRARY}" STREQUAL "")
     set(Vulkan_LIBRARY "$ENV{VULKAN_LIBRARY}" CACHE FILEPATH "Android NDK Vulkan loader stub" FORCE)
@@ -324,7 +327,7 @@ def patch_upstream(upstream: Path) -> int:
     print("  GGML_CPU=ON (CPU fallback kept)")
     print("  GGML_BACKEND_DL=OFF")
     print("  BUILD_SHARED_LIBS=ON")
-    print("  Android NDK Vulkan header + loader stub + host glslc/SPIR-V paths")
+    print("  Khronos Vulkan-Headers (vulkan.hpp) + Android NDK Vulkan loader stub + host glslc/SPIR-V paths")
     print("Expected link mode: libggml-vulkan.so and libggml-cpu*.so are ordinary shared dependencies of libggml.so; GGML_BACKEND_DL remains OFF (no dlopen plugin scan).")
     return 0
 

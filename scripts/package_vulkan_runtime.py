@@ -142,6 +142,8 @@ def main() -> int:
     parser.add_argument("--build-log", required=True, type=Path)
     parser.add_argument("--ndk-version", required=True)
     parser.add_argument("--spirv-headers-dir", required=True)
+    parser.add_argument("--vulkan-include-dir", required=True)
+    parser.add_argument("--vulkan-headers-commit", required=True)
     parser.add_argument("--glslc", required=True)
     args = parser.parse_args()
 
@@ -150,14 +152,28 @@ def main() -> int:
     if not args.build_log.is_file():
         raise SystemExit(f"Gradle/CMake build log missing: {args.build_log}")
 
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", args.vulkan_headers_commit):
+        raise SystemExit(f"Invalid Vulkan-Headers commit SHA: {args.vulkan_headers_commit!r}")
+    vulkan_include_dir = args.vulkan_include_dir.resolve()
+    for required_header in ("vulkan/vulkan.h", "vulkan/vulkan.hpp", "vulkan/vulkan_core.h"):
+        if not (vulkan_include_dir / required_header).is_file():
+            raise SystemExit(
+                f"Khronos Vulkan-Headers is incomplete: missing {vulkan_include_dir / required_header}"
+            )
+
     cache_root = args.cmake_cache_root
     caches = sorted(cache_root.rglob("CMakeCache.txt"))
     cache_records: list[dict[str, str]] = []
     cache_good: list[Path] = []
     for cache in caches:
-        values = parse_cache_values(cache.read_text(encoding="utf-8", errors="replace"))
+        cache_text = cache.read_text(encoding="utf-8", errors="replace")
+        values = parse_cache_values(cache_text)
+        include_match = re.search(r"^Vulkan_INCLUDE_DIR:[^=]+=([^\r\n]+)\s*$", cache_text, re.M)
+        values["Vulkan_INCLUDE_DIR"] = include_match.group(1).strip() if include_match else "<unset>"
         cache_records.append({"path": str(cache), **values})
-        if values == REQUIRED_CACHE:
+        if values["Vulkan_INCLUDE_DIR"] == str(vulkan_include_dir) and all(
+            values.get(key) == val for key, val in REQUIRED_CACHE.items()
+        ):
             cache_good.append(cache)
 
     graphs = sorted(cache_root.rglob("build.ninja"))
@@ -191,9 +207,10 @@ def main() -> int:
     # A real CMakeCache is authoritative. Never accept Gradle text if it says OFF.
     if caches and not cache_good:
         raise SystemExit(
-            "CMakeCache exists but none has the required effective values "
-            "GGML_VULKAN=ON, GGML_CPU=ON, GGML_BACKEND_DL=OFF, BUILD_SHARED_LIBS=ON. "
-            f"Observed caches: {cache_records}. Check the JNI CMake FORCE block and clean .cxx outputs."
+            "CMakeCache exists but none has the required effective values and Khronos Vulkan-Hpp include path "
+            "(GGML_VULKAN=ON, GGML_CPU=ON, GGML_BACKEND_DL=OFF, BUILD_SHARED_LIBS=ON, "
+            f"Vulkan_INCLUDE_DIR={vulkan_include_dir}). Observed caches: {cache_records}. "
+            "Check the JNI CMake FORCE block and Vulkan-Headers path passed by Gradle."
         )
     if not caches and not text_config_ok:
         raise SystemExit(
@@ -305,7 +322,9 @@ def main() -> int:
         "llama_cpp_submodule_describe": submodule_desc,
         "cmake_options_required": REQUIRED_CACHE,
         "backend_link_mode": "ordinary shared backend dependencies linked by libggml.so; GGML_BACKEND_DL=OFF, no dlopen plugin scan",
-        "vulkan_include_dir": "Android NDK sysroot",
+        "vulkan_include_dir": str(vulkan_include_dir),
+        "vulkan_headers_commit": args.vulkan_headers_commit,
+        "vulkan_cpp_header": str(vulkan_include_dir / "vulkan" / "vulkan.hpp"),
         "vulkan_loader_library": "Android NDK system Vulkan stub (not bundled)",
         "glslc": args.glslc,
         "spirv_headers_dir": args.spirv_headers_dir,
@@ -354,6 +373,8 @@ def main() -> int:
     print("Vulkan link: libggml.so -> libggml-vulkan.so -> libvulkan.so")
     print(f"CPU fallback shared backend(s): {', '.join(cpu_libs)}")
     print(f"Backend libraries injected from this CMake build: {', '.join(added) if added else 'none; AAR already contained them'}")
+    print(f"Vulkan-Headers commit: {args.vulkan_headers_commit}")
+    print(f"Vulkan-Hpp include: {vulkan_include_dir / 'vulkan' / 'vulkan.hpp'}")
     print(f"Runtime bundle: {runtime_zip}")
     return 0
 

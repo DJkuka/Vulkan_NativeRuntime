@@ -66,3 +66,13 @@ Target Android ARM64 values:
 - Ninja graph checks for Vulkan and CPU backend target identifiers.
 - Packaging tests verify same-build AArch64 backend objects are added to AAR without duplicate entries.
 - Full Android NDK/Gradle build and device test remain to be run in GitHub Actions and on the tablet.
+
+
+## v7 fix: missing Vulkan-Hpp header
+
+The v6 build reached `ggml-vulkan.cpp` and failed because it included `vulkan/vulkan.hpp`. Android NDK r27c provides the C header `vulkan/vulkan.h`, not the C++ Vulkan-Hpp wrapper. The previous workflow pointed `Vulkan_INCLUDE_DIR` at the NDK sysroot, so the Hpp include could not resolve. v7 fetches KhronosGroup/Vulkan-Headers tag `v1.3.290`, uses its `include/` for compile-time headers, retains the NDK ARM64 `libvulkan.so` stub for linking, performs an Android-targeted Hpp smoke compile, and validates the same include path in the generated CMakeCache.
+
+
+## v7.1: propagate Vulkan-Hpp include path
+
+The compile log proves that `ggml-vulkan.cpp` cannot see `vulkan/vulkan.hpp`; the NDK sysroot provides only the C headers. The workflow now pins Vulkan-Headers tag `v1.3.290` to commit `b379292b2ab6df5771ba9870d53cf8b2c9295daf`. The JNI CMake root sets `Vulkan_INCLUDE_DIR` and explicitly applies `include_directories(BEFORE SYSTEM ...)` before adding llama.cpp. The workflow also performs an Android ARM64 C++ syntax-only smoke compile of the actual header and the package validator requires the exact header path in the generated Android CMakeCache.
