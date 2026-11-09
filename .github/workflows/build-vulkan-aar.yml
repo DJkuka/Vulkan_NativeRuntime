@@ -101,8 +101,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/patch_upstream_vulkan.py upstream/llama-android
-          echo "Patched CMake arguments:"
-          grep -n -A18 -B2 "arguments += listOf" upstream/llama-android/library/build.gradle.kts
+          echo "Patched Gradle arguments:"
+          grep -n -A22 -B2 "arguments += listOf" upstream/llama-android/library/build.gradle.kts
+          echo "Authoritative JNI CMake cache block (must precede llama.cpp add_subdirectory):"
+          sed -n '1,130p' upstream/llama-android/library/src/main/jni/CMakeLists.txt
+          grep -n -E 'GGML_VULKAN|GGML_CPU|GGML_BACKEND_DL|BUILD_SHARED_LIBS' upstream/llama-android/library/src/main/jni/CMakeLists.txt
+          echo "Actual ggml CMake option declaration and forced value:"
+          grep -R -n -B4 -A5 'GGML_VULKAN' upstream/llama-android/llama.cpp/ggml --include='CMakeLists.txt' --include='*.cmake' | head -n 160
 
       - name: Configure Android Vulkan toolchain paths
         shell: bash
@@ -131,6 +136,10 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./gradlew
+          # This checkout is fresh, but remove any generated .cxx cache just in case
+          # the build is replayed by a self-hosted runner. The JNI CMakeLists now
+          # FORCEs GGML_VULKAN=ON before add_subdirectory(llama.cpp).
+          rm -rf library/.cxx library/build
           ./gradlew --no-daemon --stacktrace --info :library:assembleRelease 2>&1 | tee ../../vulkan-aar-build.log
           test -f library/build/outputs/aar/library-release.aar
 
@@ -141,16 +150,17 @@ jobs:
           echo "CMake caches and Ninja build graphs under the upstream checkout:"
           find upstream/llama-android -type f \
             \( -name CMakeCache.txt -o -name build.ninja \) -print | sort || true
-          echo "GGML_VULKAN cache values:"
+          echo "Effective Vulkan/CPU cache values:"
           find upstream/llama-android -type f -name CMakeCache.txt -print0 \
-            | xargs -0 -r grep -H -E '^GGML_VULKAN:' || true
-          echo "Shared backend build outputs (expected Vulkan + CPU .so):"
-          find upstream/llama-android -type f             \( -name 'libggml-vulkan.so' -o -name 'libggml-cpu*.so' \) -print | sort || true
-          while IFS= read -r so; do
-            echo "--- $so"
-            readelf -d "$so" | grep -E 'NEEDED|SONAME' || true
-          done < <(find upstream/llama-android -type f \( -name 'libggml-vulkan.so' -o -name 'libggml-cpu*.so' \) -print)
-          echo "Initial AAR native entries (backend dependencies may be injected by the packaging step):"
+            | xargs -0 -r grep -H -E '^(GGML_VULKAN|GGML_CPU|GGML_BACKEND_DL|BUILD_SHARED_LIBS):' || true
+          echo "Built ggml Vulkan/CPU shared backend outputs:"
+          find upstream/llama-android -type f \
+            \( -iname '*ggml*vulkan*' -o -iname '*ggml*cpu*' \) -print | sort | head -n 120 || true
+          echo "JNI-linked ggml dependency chain:"
+          find upstream/llama-android -type f \
+            \( -name 'libggml.so' -o -name 'libllama.so' -o -name 'libllama_jni.so' \) \
+            | while IFS= read -r so; do echo "--- $so"; readelf -d "$so" | grep -E 'NEEDED|SONAME' || true; done
+          echo "Initial AAR native entries (ordinary shared Vulkan/CPU backends must be packaged):"
           unzip -l upstream/llama-android/library/build/outputs/aar/library-release.aar | grep -E 'jni/arm64-v8a/.*\.so' || true
           echo "Vulkan references in Gradle build log:"
           grep -n -i -E 'GGML_VULKAN|GGML_BACKEND_DL|BUILD_SHARED_LIBS|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR' vulkan-aar-build.log | tail -n 120 || true

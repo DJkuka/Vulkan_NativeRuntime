@@ -1,99 +1,129 @@
 # Hy-MT2 Vulkan native runtime для Android ARM64
 
-## Это именно сборка native runtime, а не отдельное диагностическое приложение
+## Назначение
 
-Проект пересобирает **исходную библиотеку `dev.ffmpegkit-maintained:llama-android:0.1.1`** с включённым Vulkan backend llama.cpp. В upstream CPU/NEON-варианте явно задано `-DGGML_VULKAN=OFF`; здесь этот параметр заменяется на `-DGGML_VULKAN=ON`, а Vulkan backend собирается как обычная shared-библиотека `libggml-vulkan.so` и напрямую связывается с `libggml.so`.
+Это отдельный проект сборки **native runtime**, совместимого по Kotlin API с используемой интеграцией `dev.ffmpegkit-maintained:llama-android:0.1.1`. Он не является диагностическим APK и не содержит модель GGUF.
 
-Используется тот же API `dev.ffmpegkit.llama.Llama` / `LlamaConfig`, что и в уже проверенной Hy-MT2-интеграции. Это позволяет проверить именно новый движок, не переписывая Kotlin-обвязку и не затрагивая Tap Translate OCR/Tesseract/AutoFill/Google Offline Translate.
+Цель — получить AAR и отдельный набор ARM64 `.so`, в котором llama.cpp действительно собран с `GGML_VULKAN=ON`, а CPU backend остаётся включённым.
 
-**Что появится после GitHub Actions:**
+## Что было не так в предыдущих версиях
 
-- `llama-android-vulkan.aar` — AAR с тем же Kotlin API и Vulkan-enabled native runtime;
-- `libllama_jni.so`, `libggml.so`, shared-библиотека `libggml-vulkan.so` и shared CPU backend `libggml-cpu*.so`;
-- `HyMT2-Vulkan-NativeRuntime.zip` с нативными библиотеками, AAR и manifest сборки;
-- отдельный artifact с AAR для прямой подмены CPU AAR в тестовой helper-сборке.
+Upstream задаёт `-DGGML_VULKAN=OFF` в `library/build.gradle.kts`. Одной правки Gradle-аргумента оказалось недостаточно: в реальном CMake cache пользователя продолжало оставаться `GGML_VULKAN:BOOL=OFF`.
 
-Модель GGUF в проект и AAR не включается.
+Теперь патчер изменяет **три уровня конфигурации**:
 
-## Откуда берётся исходный код
+1. В `library/build.gradle.kts` выставляет `GGML_VULKAN=ON`, `GGML_CPU=ON`, `GGML_BACKEND_DL=OFF` и `BUILD_SHARED_LIBS=ON`.
+2. В `library/src/main/jni/CMakeLists.txt` вставляет блок `set(... CACHE ... FORCE)` непосредственно перед `add_subdirectory(... llama.cpp)`.
+3. В самом `llama.cpp/ggml` патчер находит реальный `option(GGML_VULKAN ... OFF)`, меняет default на `ON` и вставляет `set(GGML_VULKAN ON CACHE BOOL ... FORCE)` перед этой декларацией. Также изменяются возможные явные `set(GGML_VULKAN OFF ...)` в CMake-файлах submodule.
 
-Workflow клонирует публичный репозиторий `ffmpegkit-maintained/llama-android` с его зафиксированным git submodule `llama.cpp`. В README upstream библиотека указывает сборку llama.cpp `b9878`, ABI `arm64-v8a`, а CMake параметры `GGML_VULKAN=OFF` (Free CPU/NEON). Здесь меняется native build-конфигурация: включается Vulkan, выставляется `BUILD_SHARED_LIBS=ON`, а `GGML_BACKEND_DL=OFF`. Это важно: опция динамических backend-плагинов требует `BUILD_SHARED_LIBS=ON`, а на Android дополнительно усложняет поиск `dlopen`-модулей. Мы используем обычные shared backend-библиотеки: `libggml.so` линкуется с `libggml-vulkan.so` и `libggml-cpu.so`; Android загрузчик разрешает их через `DT_NEEDED` без поиска модулей по каталогу процесса.
+Третий уровень нужен из-за последнего лога: даже после исправления Gradle и родительского JNI CMake в реальном `.cxx/.../CMakeCache.txt` оставалось `GGML_VULKAN=OFF`. Теперь значение принудительно выставляется непосредственно в том CMake-файле, который объявляет опцию ggml.
 
-Исходный Kotlin API, JNI bridge, пакет классов и остальная логика upstream-библиотеки не переписываются.
+Workflow удаляет `library/.cxx` и `library/build` перед сборкой. После конфигурации фактический `CMakeCache.txt` становится обязательным источником истины. Если там `GGML_VULKAN=OFF`, workflow немедленно останавливается. Проверки не ослаблены.
 
-## Сборка
+## Как устроено связывание backend
 
-1. Создай **отдельный** GitHub-репозиторий для этого теста.
-2. Загрузи в него содержимое архива, сохранив `.github/workflows`, `scripts` и `README_RU.md`.
+Используется комбинация:
+
+```cmake
+-DGGML_VULKAN=ON
+-DGGML_CPU=ON
+-DGGML_BACKEND_DL=OFF
+-DBUILD_SHARED_LIBS=ON
+```
+
+Важное уточнение: `GGML_BACKEND_DL=OFF` **не означает**, что Vulkan backend статически встраивается внутрь `libggml.so`. В ggml при `BUILD_SHARED_LIBS=ON` backend targets создаются как обычные shared libraries и связываются с `libggml.so` через стандартные `DT_NEEDED` зависимости. При этом не используется режим `MODULE`/`dlopen` backend plugins.
+
+Ожидаемая зависимость:
+
+```text
+libllama_jni.so
+  └─ libllama.so
+       └─ libggml.so
+            ├─ libggml-vulkan.so
+            │    └─ libvulkan.so  (системная библиотека Android)
+            └─ libggml-cpu*.so   (CPU fallback)
+```
+
+AAR может не включить часть транзитивных native dependencies автоматически. Поэтому packaging-скрипт проверяет AAR и при необходимости добавляет `libggml-vulkan.so` и `libggml-cpu*.so`, **только если они найдены среди ARM64 результатов того же CMake build**. Скрипт не подменяет отсутствующие библиотеки host/Linux-файлами.
+
+Системная `libvulkan.so` не копируется в AAR.
+
+## Сборка через GitHub Actions
+
+1. Создай отдельный GitHub-репозиторий для этого теста.
+2. Загрузи в него содержимое архива, сохранив `.github/workflows`, `scripts`, `README_RU.md`.
 3. Сделай commit в `main`.
 4. Открой **Actions → Build llama-android Hy-MT2 Vulkan native runtime → Run workflow**.
 5. После успешной сборки скачай:
-   - `HyMT2-Vulkan-NativeRuntime-ARM64` — основной архив native runtime;
-   - `HyMT2-Vulkan-AAR-ARM64` — отдельный AAR.
+   - `HyMT2-Vulkan-AAR-ARM64` — AAR;
+   - `HyMT2-Vulkan-NativeRuntime-ARM64` — самостоятельный ZIP с AAR и native `.so`;
+   - `HyMT2-Vulkan-Build-Diagnostics` — лог и `BUILD_MANIFEST.json`.
 
-Workflow сам:
+Workflow:
 
-1. Проверяет regression-тестами патчер Gradle CMake-аргументов (вариант с `OFF`, без Vulkan-параметра и повторный запуск), затем устанавливает JDK 17, Android SDK, NDK r27c и CMake 3.22.1 (это версии, ожидаемые upstream `llama-android`).
-2. Устанавливает host `glslc` и SPIR-V headers для компиляции Vulkan shader pipeline.
-3. Клонирует upstream `llama-android` вместе с submodule `llama.cpp`.
-4. Печатает фактический CMake-блок upstream Gradle-файла. Патчер ищет CMake-параметры по имени, не привязываясь к комментарию или точному форматированию: выставляет `GGML_VULKAN=ON`, `GGML_BACKEND_DL=OFF` и `BUILD_SHARED_LIBS=ON`, а при отсутствии параметров добавляет их в `arguments += listOf(...)`. Дополнительно патчер идемпотентен и имеет офлайн regression-тесты.
-5. Передаёт CMake путь к **Android NDK Vulkan headers/loader stub** и host `glslc`/SPIR-V headers.
-6. Собирает `:library:assembleRelease` — именно AAR, а не самописный тестовый APK.
-7. Ищет `CMakeCache.txt` и `build.ninja` по всему клону upstream (не только в одном заранее заданном `.cxx`-подкаталоге), выводит найденные пути и значения `GGML_VULKAN`. Проверяет, что граф содержит `ggml-vulkan`, проверяет, что CMake собрал `libggml-vulkan.so` и `libggml-cpu*.so`; если AGP не положил shared backend-зависимости в AAR автоматически, тот же packaging-step добавляет их из текущего ARM64 CMake build output. Затем `libggml.so` должен иметь `DT_NEEDED` на оба backend-файла, а `libggml-vulkan.so` — на системный `libvulkan.so`. Сам системный loader в AAR не копируется.
-8. Если AGP не оставил `CMakeCache.txt`, допускается альтернативная проверка только при одновременном наличии `GGML_VULKAN=ON`, `GGML_BACKEND_DL=OFF` и `BUILD_SHARED_LIBS=ON` в Gradle-файле или verbose build log, цели `ggml-vulkan` в Ninja-графе и полного ELF `DT_NEEDED`-графа после упаковки.
-9. Извлекает native `.so` из AAR, считает SHA-256 и создаёт runtime ZIP.
+- устанавливает JDK 17, Android SDK, NDK r27c и CMake 3.22.1;
+- устанавливает host `glslc` и SPIR-V headers;
+- клонирует `ffmpegkit-maintained/llama-android` вместе с закреплённым submodule `llama.cpp` и проверяет tag `b9878`;
+- патчит Gradle CMake args, JNI `CMakeLists.txt` и фактическую декларацию `option(GGML_VULKAN ...)` в ggml;
+- передаёт Android NDK Vulkan headers/loader stub и host shader compiler;
+- удаляет старые `.cxx` cache и выполняет `:library:assembleRelease`;
+- печатает фактический CMake cache, Ninja graph, найденные backend build outputs и ELF dependencies;
+- при необходимости добавляет shared backend `.so` из этого же ARM64 build в AAR;
+- проверяет итоговую ELF-зависимость и публикует артефакты.
 
-## Как подключить runtime для теста
+## Обязательные критерии успешной сборки
 
-В тестовом Gradle-проекте, где сейчас указано:
+Actions не должен опубликовать runtime как успешный, пока не выполнено всё перечисленное:
+
+1. Regression-тест запускает реальный CMake с конфликтующим `-DGGML_VULKAN=OFF` и подтверждает, что после патча `CMakeCache.txt` содержит `GGML_VULKAN=ON`.
+2. Реальный Android `CMakeCache.txt` содержит `GGML_VULKAN=ON`, `GGML_CPU=ON`, `GGML_BACKEND_DL=OFF`, `BUILD_SHARED_LIBS=ON`.
+3. Сгенерированный Ninja graph содержит обе цели: `ggml-vulkan` и `ggml-cpu`.
+4. В AAR есть `libggml-vulkan.so` и хотя бы одна `libggml-cpu*.so` для `arm64-v8a`. Если AGP не упаковал их, packaging step добавляет результаты этого же CMake build.
+5. `readelf` подтверждает AArch64 ELF64 для всех `.so`.
+6. `libggml.so` содержит `DT_NEEDED` для `libggml-vulkan.so` и CPU backend.
+7. `libggml-vulkan.so` содержит `DT_NEEDED` для Android `libvulkan.so`.
+8. В AAR отсутствует собственная копия системной `libvulkan.so`.
+9. Kotlin API `dev.ffmpegkit.llama.Llama` и `LlamaConfig` присутствует в `classes.jar`.
+
+Наличие `GGML_VULKAN=ON` только в Gradle или в тексте лога не считается достаточным доказательством.
+
+## Подключение к Hy-MT2 для теста
+
+В тестовом Gradle-проекте вместо Maven-зависимости:
 
 ```gradle
 implementation("dev.ffmpegkit-maintained:llama-android:0.1.1")
 ```
 
-положи `llama-android-vulkan.aar` в `app/libs/` и временно замени зависимость на:
+положи `llama-android-vulkan.aar` в `app/libs/` и временно укажи:
 
 ```gradle
 implementation(files("libs/llama-android-vulkan.aar"))
 ```
 
-API пакета `dev.ffmpegkit.llama` оставлен upstream-совместимым. Остальной Kotlin-код загрузки Hy-MT2 и вызова `Llama.complete(...)` менять не требуется.
-
-В `LlamaConfig` есть параметр `gpuLayers`: `0` означает CPU-only, значение больше нуля запрашивает offload слоёв на GPU. Например:
+Остальной Kotlin API должен остаться прежним. Для проверки на планшете:
 
 ```kotlin
+// CPU-only baseline
 val cpuConfig = LlamaConfig(contextSize = 2048, threads = 4, gpuLayers = 0)
+
+// Начальный Vulkan probe: offload только 2 слоя
 val vulkanConfig = LlamaConfig(contextSize = 2048, threads = 4, gpuLayers = 2)
 ```
 
-Проведи один и тот же короткий перевод в двух конфигурациях. Для Vulkan начни с `gpuLayers = 2`, затем проверь `4` и `8`, каждый раз выгружая модель между запусками. Важно: этот AAR включает Vulkan backend, но конкретный `Adreno 610` ещё должен пройти runtime-тест. Сам факт успешной компиляции не доказывает, что все Vulkan kernels и memory allocation стабильно работают на драйвере планшета.
+Сравни один и тот же короткий перевод на CPU и Vulkan. Затем попробуй 4 и 8 слоёв, каждый раз выгружая модель перед повторной загрузкой. Наличие Vulkan backend в AAR ещё не гарантирует, что все kernels и выделение памяти будут работать стабильно на конкретном драйвере Adreno 610.
 
-## Что означает успешная сборка
+## Ограничения и статус
 
-Сборка считается Vulkan-сборкой только если одновременно выполнены условия:
-
-- либо upstream CMake cache содержит `GGML_VULKAN:BOOL=ON`, `GGML_BACKEND_DL:BOOL=OFF` и `BUILD_SHARED_LIBS:BOOL=ON`, либо при отсутствии cache подтверждены те же Gradle/build-log аргументы и реальный Vulkan target в Ninja-графе;
-- цель `ggml-vulkan` присутствует в generated CMake/Ninja build graph;
-- в собранном native runtime есть shared `libggml-vulkan.so` и хотя бы один shared `libggml-cpu*.so` для CPU fallback;
-- `libggml.so` имеет `DT_NEEDED` на Vulkan- и CPU-backend библиотеки, а `libggml-vulkan.so` имеет `DT_NEEDED` на системный `libvulkan.so` (сам loader не копируется в AAR);
-- AAR содержит `libllama_jni.so`, `libggml-vulkan.so` и хотя бы один `libggml-cpu*.so` для `arm64-v8a`.
-
-Если хотя бы одна обязательная проверка не прошла, GitHub Actions завершится ошибкой и не опубликует runtime artifact как успешный. В частности, простое наличие `GGML_VULKAN=ON` в Gradle-файле не считается доказательством реально собранного backend: проверяется наличие backend-файлов в CMake output, их ARM64 ELF-заголовки и цепочка `DT_NEEDED`.
-
-## Ограничения
-
-- Я подготовил исходный проект и workflow, но не запускал GitHub Actions из твоего репозитория и не могу утверждать, что AAR уже собран на runner.
-- Физическую работу на Lenovo TB128FU / Adreno 610 можно подтвердить только запуском с GGUF на самом планшете.
-- `libvulkan.so` берётся из Android. Не нужно и нельзя подменять его библиотекой, собранной для Linux/runner.
-- Этот этап — сборка и проверка native runtime. После реального теста на планшете можно перенести тот же AAR в основной Hy-MT2 проект и добавить отдельный переключатель Vulkan в настройках приложения.
+- Проект готовит исходники и CI-сборку; GitHub Actions в этом окружении не запускался.
+- Реальный AAR и его `.so` появятся только после успешного workflow.
+- Проверка на Lenovo TB128FU / Adreno 610 возможна только на самом планшете.
+- `libvulkan.so` предоставляется Android; не включай Linux loader из runner в APK/AAR.
+- Это отдельный native-runtime этап. После успешной проверки можно будет заменить CPU AAR в основном Hy-MT2 проекте, не затрагивая OCR/Tesseract/AutoFill/Google Offline Translate.
 
 ## Источники
 
-- Upstream library и описание CPU/Vulkan вариантов: https://github.com/ffmpegkit-maintained/llama-android
-- Native build configuration upstream: https://github.com/ffmpegkit-maintained/llama-android/blob/main/library/build.gradle.kts
-- llama.cpp Vulkan build options: https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md
-
-
-## Исправление проверок сборки
-
-Старая версия workflow искала cache только в `library/.cxx`. Путь внешней native-сборки задаёт Android Gradle Plugin; он может иметь вложенную структуру/каталог варианта, поэтому теперь поиск идёт от корня `upstream/llama-android`. Перед упаковкой workflow печатает все найденные `CMakeCache.txt` и `build.ninja`. Если cache не сохраняется, проверка не отключается: требуются Ninja target `ggml-vulkan`, аргументы `GGML_VULKAN=ON`, `GGML_BACKEND_DL=OFF`, `BUILD_SHARED_LIBS=ON`, shared `libggml-vulkan.so` и `libggml-cpu*.so` из этого CMake build output, а также цепочка `libggml.so` → `libggml-vulkan.so` → `libvulkan.so`.
+- Upstream `llama-android`: https://github.com/ffmpegkit-maintained/llama-android
+- Upstream Gradle build file: https://github.com/ffmpegkit-maintained/llama-android/blob/main/library/build.gradle.kts
+- llama.cpp ggml backend linking: https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/CMakeLists.txt
+- llama.cpp build options: https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md
