@@ -1,0 +1,9 @@
+.gradle/
+.cxx/
+build/
+upstream/
+dist/
+*.aar
+*.so
+*.zip
+*.log
