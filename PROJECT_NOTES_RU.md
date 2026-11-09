@@ -9,3 +9,7 @@
 
 
 - 2026-11-09 fix: patcher no longer matches the whole comment-bearing source line. It handles whitespace/comment changes, absent/upstream-already-ON variants, and is idempotent. Offline tests run in CI before cloning upstream.
+
+
+- 2026-11-09 fix v3: package verifier no longer hardcodes `library/.cxx` as the only cache root. It scans the full upstream checkout and prints all cache/Ninja locations. If AGP does not leave a CMakeCache, packaging is allowed only when the Ninja graph contains `ggml-vulkan`, the patched Gradle/build log records `GGML_VULKAN=ON`, and the final AArch64 JNI ELF has `DT_NEEDED libvulkan.so`.
+- v3 also keeps the `ggml-vulkan` Ninja target check mandatory even when CMakeCache is present. Cache absence is no longer itself fatal, but the fallback requires Gradle/build-log ON argument and final ARM64 ELF DT_NEEDED `libvulkan.so`.

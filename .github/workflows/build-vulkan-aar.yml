@@ -128,8 +128,21 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace :library:assembleRelease 2>&1 | tee ../../vulkan-aar-build.log
+          ./gradlew --no-daemon --stacktrace --info :library:assembleRelease 2>&1 | tee ../../vulkan-aar-build.log
           test -f library/build/outputs/aar/library-release.aar
+
+      - name: Diagnose Android Gradle Plugin native build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CMake caches and Ninja build graphs under the upstream checkout:"
+          find upstream/llama-android -type f \
+            \( -name CMakeCache.txt -o -name build.ninja \) -print | sort || true
+          echo "GGML_VULKAN cache values:"
+          find upstream/llama-android -type f -name CMakeCache.txt -print0 \
+            | xargs -0 -r grep -H -E '^GGML_VULKAN:' || true
+          echo "Vulkan references in Gradle build log:"
+          grep -n -i -E 'GGML_VULKAN|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR' vulkan-aar-build.log | tail -n 100 || true
 
       - name: Verify AAR and package native runtime
         shell: bash
@@ -139,7 +152,8 @@ jobs:
             --aar upstream/llama-android/library/build/outputs/aar/library-release.aar \
             --upstream upstream/llama-android \
             --out dist/native-runtime \
-            --cmake-cache-root upstream/llama-android/library/.cxx \
+            --cmake-cache-root upstream/llama-android \
+            --build-log vulkan-aar-build.log \
             --ndk-version "$ANDROID_NDK_VERSION" \
             --spirv-headers-dir "$SPIRV_HEADERS_DIR" \
             --glslc "$VULKAN_GLSLC_EXECUTABLE"

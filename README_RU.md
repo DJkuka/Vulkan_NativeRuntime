@@ -39,8 +39,9 @@ Workflow сам:
 4. Печатает фактический CMake-блок upstream Gradle-файла. Патчер ищет `GGML_VULKAN` по имени параметра, не привязываясь к комментарию или точному форматированию: заменяет `OFF` на `ON`, оставляет уже включённый `ON` или добавляет параметр в `arguments += listOf(...)`, если upstream его убрал. Дополнительно патчер идемпотентен и имеет офлайн regression-тесты.
 5. Передаёт CMake путь к **Android NDK Vulkan headers/loader stub** и host `glslc`/SPIR-V headers.
 6. Собирает `:library:assembleRelease` — именно AAR, а не самописный тестовый APK.
-7. Проверяет CMake cache на `GGML_VULKAN=ON`, ARM64 ELF-библиотеки, зависимость runtime от системного `libvulkan.so`, наличие JNI bridge и отсутствие упакованного внутрь AAR `libvulkan.so`.
-8. Извлекает native `.so` из AAR, считает SHA-256 и создаёт runtime ZIP.
+7. Ищет `CMakeCache.txt` и `build.ninja` по всему клону upstream (не только в одном заранее заданном `.cxx`-подкаталоге), выводит найденные пути и значения `GGML_VULKAN`. Проверяет, что граф действительно содержит `ggml-vulkan`, ARM64 ELF зависит от системного `libvulkan.so`, JNI bridge присутствует, а сам системный loader не упакован в AAR.
+8. Если AGP не оставил `CMakeCache.txt`, допускается альтернативная проверка только при одновременном наличии патченного `-DGGML_VULKAN=ON` в Gradle-файле или verbose build log, цели `ggml-vulkan` в Ninja-графе и `DT_NEEDED libvulkan.so` у итогового ARM64 ELF.
+9. Извлекает native `.so` из AAR, считает SHA-256 и создаёт runtime ZIP.
 
 ## Как подключить runtime для теста
 
@@ -71,13 +72,13 @@ val vulkanConfig = LlamaConfig(contextSize = 2048, threads = 4, gpuLayers = 2)
 
 Сборка считается Vulkan-сборкой только если одновременно выполнены условия:
 
-- upstream CMake cache содержит `GGML_VULKAN:BOOL=ON`;
+- либо upstream CMake cache содержит `GGML_VULKAN:BOOL=ON`, либо при отсутствии cache подтверждены Gradle/build-log аргумент и реальный Vulkan target в Ninja-графе;
 - цель `ggml-vulkan` присутствует в generated CMake/Ninja build graph;
 - в собранном native runtime есть Vulkan code/backend;
 - native ELF динамически ссылается на системный `libvulkan.so` (сам loader не копируется в AAR);
 - AAR содержит `libllama_jni.so` для `arm64-v8a`.
 
-Если хотя бы одна проверка не прошла, GitHub Actions завершится ошибкой и не опубликует runtime artifact как успешный.
+Если хотя бы одна обязательная проверка не прошла, GitHub Actions завершится ошибкой и не опубликует runtime artifact как успешный. В частности, простое наличие `GGML_VULKAN=ON` в Gradle-файле не считается доказательством реально собранного backend.
 
 ## Ограничения
 
@@ -91,3 +92,8 @@ val vulkanConfig = LlamaConfig(contextSize = 2048, threads = 4, gpuLayers = 2)
 - Upstream library и описание CPU/Vulkan вариантов: https://github.com/ffmpegkit-maintained/llama-android
 - Native build configuration upstream: https://github.com/ffmpegkit-maintained/llama-android/blob/main/library/build.gradle.kts
 - llama.cpp Vulkan build options: https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md
+
+
+## Исправление ошибки `No CMakeCache.txt with GGML_VULKAN:BOOL=ON was found`
+
+Старая версия workflow искала cache только в `library/.cxx`. Путь внешней native-сборки задаёт Android Gradle Plugin; он может иметь вложенную структуру/каталог варианта, поэтому теперь поиск идёт от корня `upstream/llama-android`. Перед упаковкой workflow печатает все найденные `CMakeCache.txt` и `build.ninja`. Если cache не сохраняется, проверка не отключается: требуется Ninja target `ggml-vulkan` и реальная ELF-зависимость от `libvulkan.so`, плюс аргумент `GGML_VULKAN=ON` в Gradle либо build log.
