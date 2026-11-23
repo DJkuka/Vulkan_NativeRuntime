@@ -144,6 +144,23 @@ jobs:
           git clone https://github.com/ffmpegkit-maintained/llama-android.git upstream/llama-android
           git -C upstream/llama-android checkout --detach 9f5469fd9fa7ea7bc7b01801923af95dc3b41d52
           git -C upstream/llama-android submodule update --init --recursive
+
+          # Pin the exact STQ1_0 implementation, not the wrapper's stale gitlink.
+          # The wrapper remains unchanged; only its llama.cpp submodule is moved.
+          LLAMA_CPP_STQ1_COMMIT="1e411d8f5a1e23525fa3265dfb4bd76265465397"
+          git -C upstream/llama-android/llama.cpp fetch --no-tags origin "$LLAMA_CPP_STQ1_COMMIT"
+          git -C upstream/llama-android/llama.cpp checkout --detach "$LLAMA_CPP_STQ1_COMMIT"
+          ACTUAL_LLAMA_CPP_COMMIT="$(git -C upstream/llama-android/llama.cpp rev-parse HEAD)"
+          if [ "$ACTUAL_LLAMA_CPP_COMMIT" != "$LLAMA_CPP_STQ1_COMMIT" ]; then
+            echo "Wrong llama.cpp revision: $ACTUAL_LLAMA_CPP_COMMIT (expected $LLAMA_CPP_STQ1_COMMIT)" >&2
+            exit 1
+          fi
+          # Fail before CMake/Gradle if the checked-out source does not declare STQ1_0.
+          if ! grep -q 'GGML_TYPE_STQ1_0' upstream/llama-android/llama.cpp/ggml/include/ggml.h; then
+            echo "Pinned llama.cpp source does not declare GGML_TYPE_STQ1_0" >&2
+            exit 1
+          fi
+          echo "Verified llama.cpp STQ1_0 commit: $ACTUAL_LLAMA_CPP_COMMIT"
           test -f upstream/llama-android/library/build.gradle.kts
           test -f upstream/llama-android/llama.cpp/CMakeLists.txt
 
