@@ -147,6 +147,42 @@ jobs:
           test -f upstream/llama-android/library/build.gradle.kts
           test -f upstream/llama-android/llama.cpp/CMakeLists.txt
 
+      - name: Remove publishing-only Gradle plugin from local build
+        shell: bash
+        working-directory: upstream/llama-android
+        run: |
+          set -euo pipefail
+          # We only assemble the AAR; Maven publishing is not part of this build.
+          # The pinned wrapper applies Vanniktech's publishing plugin at both root
+          # and library level. Resolving that plugin marker hit Maven Central 429
+          # and stopped configuration before native compilation. Remove only the
+          # publishing plugin and its DSL from this temporary checkout.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("build.gradle.kts")
+          root_text = root.read_text()
+          root_line = "    alias(libs.plugins.vanniktech.publish) apply false\\n"
+          if root_line not in root_text:
+              raise SystemExit("Expected root Vanniktech plugin declaration not found")
+          root.write_text(root_text.replace(root_line, "", 1))
+
+          module = Path("library/build.gradle.kts")
+          module_text = module.read_text()
+          module_line = "    alias(libs.plugins.vanniktech.publish)\\n"
+          if module_line not in module_text:
+              raise SystemExit("Expected library Vanniktech plugin declaration not found")
+          module_text = module_text.replace(module_line, "", 1)
+          pattern = r"\\nmavenPublishing \\{\\n.*?\\n\\}\\n\\n(?=// --- THIRD-PARTY-NOTICES)"
+          module_text, count = re.subn(pattern, "\\n", module_text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit("Could not safely remove the publishing-only DSL block")
+          module.write_text(module_text)
+          print("Removed Vanniktech publishing plugin; retained Android/Kotlin/native build configuration.")
+          PY
+          ! grep -R -n "vanniktech.publish\\|mavenPublishing" build.gradle.kts library/build.gradle.kts
+
           # This pinned upstream PR contains the STQ1_0 enum, format decoder,
           # ARM NEON CPU dot-product kernel and the follow-up CI fixes. The old
           # b9878 submodule lacks GGML_TYPE_STQ1_0 (its GGML_TYPE_COUNT is 42).
