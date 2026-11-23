@@ -147,58 +147,53 @@ jobs:
           test -f upstream/llama-android/library/build.gradle.kts
           test -f upstream/llama-android/llama.cpp/CMakeLists.txt
 
-      - name: Remove publishing-only Gradle plugin from local build
+      - name: Remove unused publishing plugin for local AAR build
         shell: bash
         working-directory: upstream/llama-android
         run: |
           set -euo pipefail
           # We only assemble the AAR; Maven publishing is not part of this build.
-          # The pinned wrapper applies Vanniktech's publishing plugin at both root
-          # and library level. Resolving that plugin marker hit Maven Central 429
-          # and stopped configuration before native compilation. Remove only the
-          # publishing plugin and its DSL from this temporary checkout.
+          # Strip the publishing plugin and DSL from this temporary checkout.
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           root = Path("build.gradle.kts")
-          root_text = root.read_text()
-          root_line = "    alias(libs.plugins.vanniktech.publish) apply false\\n"
-          if root_line not in root_text:
-              raise SystemExit("Expected root Vanniktech plugin declaration not found")
-          root.write_text(root_text.replace(root_line, "", 1))
+          root_lines = root.read_text().splitlines(keepends=True)
+          plugin_root = "alias(libs.plugins.vanniktech.publish) apply false"
+          root_filtered = [line for line in root_lines if line.strip() != plugin_root]
+          if len(root_filtered) == len(root_lines):
+              raise SystemExit("Root publishing plugin line not found")
+          root.write_text("".join(root_filtered))
 
           module = Path("library/build.gradle.kts")
-          module_text = module.read_text()
-          module_line = "    alias(libs.plugins.vanniktech.publish)\\n"
-          if module_line not in module_text:
-              raise SystemExit("Expected library Vanniktech plugin declaration not found")
-          module_text = module_text.replace(module_line, "", 1)
-          pattern = r"\\nmavenPublishing \\{\\n.*?\\n\\}\\n\\n(?=// --- THIRD-PARTY-NOTICES)"
-          module_text, count = re.subn(pattern, "\\n", module_text, count=1, flags=re.S)
-          if count != 1:
-              raise SystemExit("Could not safely remove the publishing-only DSL block")
-          module.write_text(module_text)
-          print("Removed Vanniktech publishing plugin; retained Android/Kotlin/native build configuration.")
-          PY
-          ! grep -R -n "vanniktech.publish\\|mavenPublishing" build.gradle.kts library/build.gradle.kts
+          lines = module.read_text().splitlines(keepends=True)
+          plugin_module = "alias(libs.plugins.vanniktech.publish)"
+          filtered = [line for line in lines if line.strip() != plugin_module]
+          if len(filtered) == len(lines):
+              raise SystemExit("Library publishing plugin line not found")
 
-          # This pinned upstream PR contains the STQ1_0 enum, format decoder,
-          # ARM NEON CPU dot-product kernel and the follow-up CI fixes. The old
-          # b9878 submodule lacks GGML_TYPE_STQ1_0 (its GGML_TYPE_COUNT is 42).
-          git -C upstream/llama-android/llama.cpp fetch origin 1e411d8f5a1e23525fa3265dfb4bd76265465397
-          git -C upstream/llama-android/llama.cpp checkout --detach 1e411d8f5a1e23525fa3265dfb4bd76265465397
-          LLAMA_CPP_SHA="$(git -C upstream/llama-android/llama.cpp rev-parse HEAD)"
-          test "$LLAMA_CPP_SHA" = "1e411d8f5a1e23525fa3265dfb4bd76265465397"
-          grep -q 'GGML_TYPE_STQ1_0' upstream/llama-android/llama.cpp/ggml/include/ggml.h
-          grep -q 'GGML_TYPE_STQ1_0' upstream/llama-android/llama.cpp/ggml/src/ggml.c
-          grep -q 'GGML_TYPE_STQ1_0' upstream/llama-android/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.c
-          test -f upstream/llama-android/llama.cpp/ggml/src/ggml-cpu/arch/arm/quants.c
-          echo "Upstream llama-android: $(git -C upstream/llama-android rev-parse HEAD)"
-          echo "STQ1_0-capable llama.cpp: $LLAMA_CPP_SHA"
-          echo "llama.cpp ancestry: $(git -C upstream/llama-android/llama.cpp describe --always --long)"
-          git -C upstream/llama-android submodule status --recursive
-          echo "LLAMA_CPP_COMMIT=$LLAMA_CPP_SHA" >> "$GITHUB_ENV"
+          start = next((i for i, line in enumerate(filtered)
+                        if line.strip() == "mavenPublishing {"), None)
+          if start is None:
+              raise SystemExit("mavenPublishing block not found")
+          depth = 0
+          end = None
+          for i in range(start, len(filtered)):
+              depth += filtered[i].count("{") - filtered[i].count("}")
+              if depth == 0:
+                  end = i
+                  break
+          if end is None:
+              raise SystemExit("mavenPublishing block braces are unbalanced")
+          del filtered[start:end + 1]
+          module.write_text("".join(filtered))
+
+          for file in (root, module):
+              data = file.read_text()
+              if "vanniktech.publish" in data or "mavenPublishing" in data:
+                  raise SystemExit(f"Publishing configuration still present in {file}")
+          print("Publishing-only configuration removed; Android/Kotlin/native build settings retained.")
+          PY
 
       - name: Show upstream CMake argument block
         shell: bash
