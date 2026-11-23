@@ -349,6 +349,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Publish verified STQ1_0 AAR release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: stq1.0-runtime
+          name: STQ1_0-capable Vulkan runtime
+          files: dist/llama-android-vulkan.aar
+          overwrite_files: true
+          fail_on_unmatched_files: true
+
       - name: Upload standalone Vulkan native runtime
         uses: actions/upload-artifact@v4
         with:
