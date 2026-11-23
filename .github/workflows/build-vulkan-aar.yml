@@ -6,7 +6,7 @@ on:
     branches: [ main ]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-vulkan-aar:
@@ -136,19 +136,33 @@ jobs:
       - name: Test Android Vulkan-Hpp toolchain wiring
         run: python3 scripts/test_vulkan_headers_workflow.py
 
-      - name: Fetch upstream llama-android and pinned llama.cpp submodule
+      - name: Fetch pinned Android wrapper and STQ1_0-capable llama.cpp
         shell: bash
         run: |
           set -euo pipefail
-          git clone --recurse-submodules https://github.com/ffmpegkit-maintained/llama-android.git upstream/llama-android
+          # Keep the same Android Kotlin/JNI wrapper and Gradle API as the known-good AAR.
+          git clone https://github.com/ffmpegkit-maintained/llama-android.git upstream/llama-android
+          git -C upstream/llama-android checkout --detach 9f5469fd9fa7ea7bc7b01801923af95dc3b41d52
+          git -C upstream/llama-android submodule update --init --recursive
           test -f upstream/llama-android/library/build.gradle.kts
           test -f upstream/llama-android/llama.cpp/CMakeLists.txt
+
+          # This pinned upstream PR contains the STQ1_0 enum, format decoder,
+          # ARM NEON CPU dot-product kernel and the follow-up CI fixes. The old
+          # b9878 submodule lacks GGML_TYPE_STQ1_0 (its GGML_TYPE_COUNT is 42).
+          git -C upstream/llama-android/llama.cpp fetch origin 1e411d8f5a1e23525fa3265dfb4bd76265465397
+          git -C upstream/llama-android/llama.cpp checkout --detach 1e411d8f5a1e23525fa3265dfb4bd76265465397
+          LLAMA_CPP_SHA="$(git -C upstream/llama-android/llama.cpp rev-parse HEAD)"
+          test "$LLAMA_CPP_SHA" = "1e411d8f5a1e23525fa3265dfb4bd76265465397"
+          grep -q 'GGML_TYPE_STQ1_0' upstream/llama-android/llama.cpp/ggml/include/ggml.h
+          grep -q 'GGML_TYPE_STQ1_0' upstream/llama-android/llama.cpp/ggml/src/ggml.c
+          grep -q 'GGML_TYPE_STQ1_0' upstream/llama-android/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.c
+          test -f upstream/llama-android/llama.cpp/ggml/src/ggml-cpu/arch/arm/quants.c
           echo "Upstream llama-android: $(git -C upstream/llama-android rev-parse HEAD)"
-          echo "llama.cpp submodule: $(git -C upstream/llama-android/llama.cpp rev-parse HEAD)"
+          echo "STQ1_0-capable llama.cpp: $LLAMA_CPP_SHA"
+          echo "llama.cpp ancestry: $(git -C upstream/llama-android/llama.cpp describe --always --long)"
           git -C upstream/llama-android submodule status --recursive
-          LLAMA_DESC="$(git -C upstream/llama-android/llama.cpp describe --tags --exact-match)"
-          echo "Pinned llama.cpp tag: $LLAMA_DESC"
-          test "$LLAMA_DESC" = "b9878"
+          echo "LLAMA_CPP_COMMIT=$LLAMA_CPP_SHA" >> "$GITHUB_ENV"
 
       - name: Show upstream CMake argument block
         shell: bash
@@ -255,7 +269,7 @@ jobs:
           echo "Vulkan references in Gradle build log:"
           grep -n -i -E 'GGML_VULKAN|GGML_BACKEND_DL|BUILD_SHARED_LIBS|ggml-vulkan|Vulkan_LIBRARY|Vulkan_INCLUDE_DIR|SPIRV_HEADERS_INCLUDE_DIR|vulkan.hpp|spirv.hpp' vulkan-aar-build.log | tail -n 160 || true
 
-      - name: Verify AAR and package native runtime
+      - name: Verify AAR and STQ1_0 support, then package native runtime
         shell: bash
         run: |
           set -euo pipefail
@@ -275,6 +289,7 @@ jobs:
           mkdir -p dist
           cp upstream/llama-android/library/build/outputs/aar/library-release.aar dist/llama-android-vulkan.aar
           cp vulkan-aar-build.log dist/
+          python3 scripts/verify_stq1_0_runtime.py --aar dist/llama-android-vulkan.aar
           unzip -t dist/llama-android-vulkan.aar
           unzip -t dist/HyMT2-Vulkan-NativeRuntime.zip
 
